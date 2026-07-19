@@ -1,0 +1,8 @@
+{
+  "name": "testforge-parser",
+  "private": true,
+  "type": "commonjs",
+  "scripts": {
+    "parse": "node --experimental-strip-types parse.ts"
+  }
+}
