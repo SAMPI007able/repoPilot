@@ -43,6 +43,72 @@ function getImportPath(node) {
   return node.moduleSpecifier.text;
 }
 
+function isLocalModule(modulePath) {
+  return modulePath.startsWith(".");
+}
+
+function toPosix(filePath) {
+  return filePath.split(path.sep).join("/");
+}
+
+function findRepositoryRoot(startPath) {
+  let currentPath = path.dirname(startPath);
+
+  while (true) {
+    const markers = [
+      path.join(currentPath, ".git"),
+      path.join(currentPath, "package.json"),
+      path.join(currentPath, "tsconfig.json"),
+    ];
+
+    if (markers.some((marker) => fs.existsSync(marker))) {
+      return currentPath;
+    }
+
+    const parentPath = path.dirname(currentPath);
+    if (parentPath === currentPath) {
+      return path.dirname(startPath);
+    }
+
+    currentPath = parentPath;
+  }
+}
+
+function resolveLocalImport(filePath, modulePath) {
+  const basePath = path.resolve(path.dirname(filePath), modulePath);
+  const repositoryRoot = findRepositoryRoot(filePath);
+  const candidates = [
+    basePath,
+    `${basePath}.ts`,
+    `${basePath}.tsx`,
+    `${basePath}.js`,
+    `${basePath}.jsx`,
+    path.join(basePath, "index.ts"),
+    path.join(basePath, "index.tsx"),
+    path.join(basePath, "index.js"),
+    path.join(basePath, "index.jsx"),
+  ];
+
+  for (const candidate of candidates) {
+    if (fs.existsSync(candidate) && fs.statSync(candidate).isFile()) {
+      return toPosix(path.relative(repositoryRoot, candidate));
+    }
+  }
+
+  return null;
+}
+
+function buildImportReference(filePath, node) {
+  const modulePath = getImportPath(node);
+  const kind = isLocalModule(modulePath) ? "local" : "external";
+
+  return {
+    module: modulePath,
+    resolved: kind === "local" ? resolveLocalImport(filePath, modulePath) : null,
+    kind,
+  };
+}
+
 function collectFunctionNames(node, functions) {
   if (ts.isFunctionDeclaration(node) && node.name) {
     functions.push(node.name.text);
@@ -65,6 +131,7 @@ function extractMetadata(filePath) {
 
   const metadata = {
     file: path.basename(filePath),
+    source_code: sourceText,
     classes: [],
     functions: [],
     imports: [],
@@ -72,7 +139,7 @@ function extractMetadata(filePath) {
 
   function visit(node) {
     if (ts.isImportDeclaration(node)) {
-      metadata.imports.push(getImportPath(node));
+      metadata.imports.push(buildImportReference(filePath, node));
     }
 
     if (ts.isClassDeclaration(node) && node.name) {

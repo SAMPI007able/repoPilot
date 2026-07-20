@@ -1,7 +1,6 @@
 import json
 import os
 import subprocess
-from typing import Any, Dict
 from app.models.code_models import CodeClass, CodeMethod, ImportReference, ParsedFile
 
 
@@ -21,24 +20,40 @@ class ParserService:
                 ["node", "--experimental-strip-types", self.parser_script, file_path],
                 cwd=self.parser_cwd,
                 capture_output=True,
-                text=True,
+                text=False,
                 check=True,
             )
         except subprocess.CalledProcessError as exc:
-            error_message = exc.stderr.strip() or exc.stdout.strip() or str(exc)
+            stderr = self._decode_output(exc.stderr)
+            stdout = self._decode_output(exc.stdout)
+            error_message = stderr.strip() or stdout.strip() or str(exc)
             raise RuntimeError(f"Node parser failed for {file_path}: {error_message}") from exc
 
         try:
-            raw_metadata = json.loads(result.stdout)
+            raw_metadata = json.loads(self._decode_output(result.stdout))
         except json.JSONDecodeError as exc:
             raise RuntimeError(
-                f"Node parser returned invalid JSON for {file_path}: {result.stdout!r}"
+                f"Node parser returned invalid JSON for {file_path}: {self._decode_output(result.stdout)!r}"
             ) from exc
 
         return ParsedFile(
             path=relative_path or raw_metadata["file"],
             file=raw_metadata["file"],
+            source_code=raw_metadata["source_code"],
             classes=[CodeClass(name=name) for name in raw_metadata.get("classes", [])],
             functions=[CodeMethod(name=name) for name in raw_metadata.get("functions", [])],
-            imports=[ImportReference(path=path) for path in raw_metadata.get("imports", [])],
+            imports=[
+                ImportReference(
+                    module=import_reference["module"],
+                    resolved=import_reference.get("resolved"),
+                    kind=import_reference["kind"],
+                )
+                for import_reference in raw_metadata.get("imports", [])
+            ],
         )
+
+    def _decode_output(self, output: bytes | None) -> str:
+        if output is None:
+            return ""
+
+        return output.decode("utf-8", errors="replace")
