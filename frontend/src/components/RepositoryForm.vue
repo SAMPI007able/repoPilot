@@ -5,14 +5,24 @@ const props = defineProps<{
   modelValue: string
   busy: boolean
   error: string | null
+  projectDocuments: File[]
 }>()
 
 const emit = defineEmits<{
   'update:modelValue': [value: string]
+  'update:projectDocuments': [files: File[]]
   submit: []
 }>()
 
 const isDisabled = computed(() => props.busy || !props.modelValue.trim())
+
+function updateProjectDocuments(event: Event) {
+  const input = event.target as HTMLInputElement
+  const files = input.files ? Array.from(input.files) : []
+  emit('update:projectDocuments', files)
+}
+
+const projectDocumentNames = computed(() => props.projectDocuments.map((file) => file.name).join(', '))
 </script>
 
 <template>
@@ -34,6 +44,19 @@ const isDisabled = computed(() => props.busy || !props.modelValue.trim())
         placeholder="https://github.com/org/repo"
         @input="emit('update:modelValue', ($event.target as HTMLInputElement).value)"
       >
+    </label>
+
+    <label class="field">
+      <span class="field__label">Project Documents (optional)</span>
+      <input
+        class="field__input"
+        type="file"
+        multiple
+        accept=".md,.pdf,.docx,.pptx,.txt,.yaml,.yml,.json,.csv,.rst,.xml"
+        @change="updateProjectDocuments"
+      />
+      <p class="muted" v-if="projectDocumentNames">Selected: {{ projectDocumentNames }}</p>
+      <p class="muted" v-else>Upload README, design docs, API specs, or other project documentation.</p>
     </label>
 
     <p v-if="error" class="error-banner">{{ error }}</p>

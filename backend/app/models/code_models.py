@@ -48,7 +48,7 @@ class RepositoryMetadata(BaseModel):
     documentation: list["DocumentationAsset"] = Field(default_factory=list)
     parsedFiles: list[ParsedFileSummary] = Field(default_factory=list)
     parsed_file_details: list[ParsedFile] = Field(default_factory=list, exclude=True)
-    relationships: list["GraphRelationship"] = Field(default_factory=list, exclude=True)
+    relationships: list["GraphRelationship"] = Field(default_factory=list)
 
 
 class GraphRelationship(BaseModel):
@@ -92,3 +92,18 @@ class PackageIntelligence(BaseModel):
 class DocumentationAsset(BaseModel):
     path: str
     source: str
+
+
+class ImpactedComponent(BaseModel):
+    name: str
+    path: str
+    reason: str
+
+
+class ImpactAnalysisResult(BaseModel):
+    workspaceId: str
+    target: str
+    affectedComponents: list[ImpactedComponent] = Field(default_factory=list)
+    potentiallyAffectedTests: list[str] = Field(default_factory=list)
+    risk: str
+    summary: str

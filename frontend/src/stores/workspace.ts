@@ -3,14 +3,22 @@ import { defineStore } from 'pinia'
 import { buildWorkspace } from '../services/api'
 import type { RepositoryMetadata } from '../types/api'
 
-type WorkspaceStageId = 'clone' | 'index' | 'classes' | 'graph'
-type WorkspaceStageStatus = 'idle' | 'active' | 'done'
+export type WorkspaceStatus = 'pending' | 'indexing' | 'graphing' | 'analyzing' | 'ready'
+
+export interface WorkspaceListItem {
+  id: string
+  repoName: string
+  repoUrl: string
+  status: WorkspaceStatus
+  docs: string[]
+  metadata: RepositoryMetadata | null
+}
 
 export interface WorkspaceStage {
-  id: WorkspaceStageId
+  id: 'pending' | 'indexing' | 'graphing' | 'analyzing' | 'ready'
   label: string
   detail: string
-  status: WorkspaceStageStatus
+  status: 'upcoming' | 'active' | 'done'
 }
 
 function wait(ms: number) {
@@ -19,52 +27,55 @@ function wait(ms: number) {
 
 export const useWorkspaceStore = defineStore('workspace', () => {
   const repositoryUrl = ref('')
-  const metadata = ref<RepositoryMetadata | null>(null)
-  const isBuilding = ref(false)
+  const projectDocuments = ref<File[]>([])
+  const workspaces = ref<WorkspaceListItem[]>([])
+  const activeId = ref<string | null>(null)
+  const loadingList = ref(false)
+  const busy = ref(false)
   const error = ref<string | null>(null)
-  const currentWorkspaceId = ref<string | null>(null)
 
-  const stages = ref<WorkspaceStage[]>([
-    { id: 'clone', label: 'Repository Cloned', detail: 'Connecting to Git and pulling source.', status: 'idle' },
-    { id: 'index', label: 'Files Indexed', detail: 'Scanning supported files and metadata.', status: 'idle' },
-    { id: 'classes', label: 'Symbols Counted', detail: 'Summarizing classes and methods.', status: 'idle' },
-    { id: 'graph', label: 'Knowledge Graph Built', detail: 'Linking imports, tests, docs, and packages.', status: 'idle' },
-  ])
+  const activeWorkspace = computed(() => workspaces.value.find((workspace) => workspace.id === activeId.value) ?? null)
+  const metadata = computed(() => activeWorkspace.value?.metadata ?? null)
+  const currentWorkspaceId = computed(() => activeWorkspace.value?.metadata?.repository ?? null)
 
   const frameworkLabel = computed(() => {
-    if (!metadata.value) {
-      return 'Not indexed yet'
+    const value = metadata.value
+    if (!value) {
+      return 'Framework pending'
     }
 
-    const framework = metadata.value.packageInfo?.vueVersion
-      ? `Vue ${metadata.value.packageInfo.vueVersion}`
-      : metadata.value.packageInfo?.reactVersion
-        ? `React ${metadata.value.packageInfo.reactVersion}`
+    const appFramework = value.packageInfo?.vueVersion
+      ? `Vue ${cleanVersion(value.packageInfo.vueVersion)}`
+      : value.packageInfo?.reactVersion
+        ? `React ${cleanVersion(value.packageInfo.reactVersion)}`
         : 'JavaScript'
 
-    return metadata.value.testFramework
-      ? `${framework} + ${capitalize(metadata.value.testFramework)}`
-      : framework
+    return value.testFramework ? `${appFramework} + ${capitalize(value.testFramework)}` : appFramework
   })
 
-  const dashboardStats = computed(() => {
-    if (!metadata.value) {
-      return []
+  const pipelineStages = computed<WorkspaceStage[]>(() => {
+    const order: WorkspaceStage['id'][] = ['pending', 'indexing', 'graphing', 'analyzing', 'ready']
+    const labels: Record<WorkspaceStage['id'], Omit<WorkspaceStage, 'status'>> = {
+      pending: { id: 'pending', label: 'Repository clone', detail: 'Cloning workspace source' },
+      indexing: { id: 'indexing', label: 'Indexing', detail: 'Parsing files & symbols' },
+      graphing: { id: 'graphing', label: 'Graph construction', detail: 'Resolving dependencies' },
+      analyzing: { id: 'analyzing', label: 'Repository analysis', detail: 'Coupling, complexity, coverage' },
+      ready: { id: 'ready', label: 'Ready', detail: 'Workspace built' },
     }
 
-    const classCount = metadata.value.parsedFiles.reduce((sum, file) => sum + file.classes, 0)
-    const methodCount = metadata.value.parsedFiles.reduce((sum, file) => sum + file.functions, 0)
-    const importCount = metadata.value.parsedFiles.reduce((sum, file) => sum + file.imports, 0)
-    const graphNodes = metadata.value.statistics.files + classCount
-    const graphEdges = importCount
+    const workspaceStatus = activeWorkspace.value?.status ?? 'pending'
+    const activeIndex = order.indexOf(workspaceStatus)
 
-    return [
-      { label: 'Classes', value: classCount },
-      { label: 'Methods', value: methodCount },
-      { label: 'Imports', value: importCount },
-      { label: 'Graph Nodes', value: graphNodes },
-      { label: 'Graph Edges', value: graphEdges },
-    ]
+    return order.map((id, index) => ({
+      ...labels[id],
+      status: workspaceStatus === 'ready'
+        ? 'done'
+        : index < activeIndex
+          ? 'done'
+          : index === activeIndex
+            ? 'active'
+            : 'upcoming',
+    }))
   })
 
   const targetOptions = computed(() => {
@@ -75,12 +86,10 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     return metadata.value.parsedFiles
       .filter((file) => !file.path.includes('.test.') && !file.path.includes('.spec.'))
       .map((file) => {
-        const segments = file.path.split('/')
-        const fileName = segments[segments.length - 1]
-        const label = fileName.replace(/\.[^.]+$/, '')
+        const fileName = file.path.split('/').pop() ?? file.path
         return {
-          label,
-          value: label,
+          label: fileName.replace(/\.[^.]+$/, ''),
+          value: fileName.replace(/\.[^.]+$/, ''),
           path: file.path,
         }
       })
@@ -88,45 +97,55 @@ export const useWorkspaceStore = defineStore('workspace', () => {
 
   async function createWorkspace() {
     if (!repositoryUrl.value.trim()) {
-      error.value = 'Add a GitHub repository URL to build a workspace.'
+      error.value = 'Paste a repository URL to begin.'
       return null
     }
 
-    isBuilding.value = true
+    busy.value = true
     error.value = null
-    metadata.value = null
-    currentWorkspaceId.value = null
-    resetStages()
+
+    const workspaceId = slugify(repositoryUrl.value)
+    const nextWorkspace: WorkspaceListItem = {
+      id: workspaceId,
+      repoName: extractRepoName(repositoryUrl.value),
+      repoUrl: repositoryUrl.value.trim(),
+      status: 'pending',
+      docs: projectDocuments.value.map((file) => file.name),
+      metadata: null,
+    }
+
+    upsertWorkspace(nextWorkspace)
+    activeId.value = workspaceId
 
     try {
-      setStageStatus('clone', 'active')
-      const nextMetadata = await buildWorkspace(repositoryUrl.value.trim())
-      setStageStatus('clone', 'done')
+      const indexPromise = buildWorkspace(repositoryUrl.value.trim(), projectDocuments.value)
 
-      await wait(250)
-      setStageStatus('index', 'active')
-      await wait(280)
-      setStageStatus('index', 'done')
+      await wait(200)
+      patchWorkspace(workspaceId, { status: 'indexing' })
+      await wait(600)
+      patchWorkspace(workspaceId, { status: 'graphing' })
+      await wait(700)
+      patchWorkspace(workspaceId, { status: 'analyzing' })
 
-      await wait(180)
-      setStageStatus('classes', 'active')
-      await wait(220)
-      setStageStatus('classes', 'done')
+      const nextMetadata = await indexPromise
+      patchWorkspace(workspaceId, {
+        repoName: nextMetadata.repository,
+        status: 'ready',
+        metadata: nextMetadata,
+      })
 
-      await wait(160)
-      setStageStatus('graph', 'active')
-      await wait(240)
-      setStageStatus('graph', 'done')
-
-      metadata.value = nextMetadata
-      currentWorkspaceId.value = nextMetadata.repository
+      repositoryUrl.value = ''
+      projectDocuments.value = []
       return nextMetadata
     } catch (caughtError) {
       error.value = extractMessage(caughtError, 'Failed to build workspace.')
-      resetStages()
+      workspaces.value = workspaces.value.filter((workspace) => workspace.id !== workspaceId)
+      if (activeId.value === workspaceId) {
+        activeId.value = workspaces.value[0]?.id ?? null
+      }
       return null
     } finally {
-      isBuilding.value = false
+      busy.value = false
     }
   }
 
@@ -134,32 +153,58 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     repositoryUrl.value = value
   }
 
-  function resetStages() {
-    stages.value = stages.value.map((stage) => ({
-      ...stage,
-      status: 'idle',
-    }))
+  function setProjectDocuments(files: File[]) {
+    projectDocuments.value = files
   }
 
-  function setStageStatus(id: WorkspaceStageId, status: WorkspaceStageStatus) {
-    stages.value = stages.value.map((stage) => ({
-      ...stage,
-      status: stage.id === id ? status : stage.status === 'active' && status === 'active' ? 'done' : stage.status,
-    }))
+  function selectWorkspace(id: string) {
+    activeId.value = id
+  }
+
+  function startNewWorkspace() {
+    activeId.value = null
+    error.value = null
+  }
+
+  function upsertWorkspace(workspace: WorkspaceListItem) {
+    const index = workspaces.value.findIndex((item) => item.id === workspace.id)
+    if (index === -1) {
+      workspaces.value = [workspace, ...workspaces.value]
+      return
+    }
+
+    workspaces.value[index] = workspace
+    workspaces.value = [...workspaces.value]
+  }
+
+  function patchWorkspace(id: string, patch: Partial<WorkspaceListItem>) {
+    const existing = workspaces.value.find((workspace) => workspace.id === id)
+    if (!existing) {
+      return
+    }
+
+    upsertWorkspace({ ...existing, ...patch })
   }
 
   return {
     repositoryUrl,
+    projectDocuments,
+    workspaces,
+    activeId,
+    activeWorkspace,
     metadata,
-    isBuilding,
-    error,
-    stages,
     currentWorkspaceId,
+    loadingList,
+    busy,
+    error,
     frameworkLabel,
-    dashboardStats,
+    pipelineStages,
     targetOptions,
     createWorkspace,
     setRepositoryUrl,
+    setProjectDocuments,
+    selectWorkspace,
+    startNewWorkspace,
   }
 })
 
@@ -176,6 +221,18 @@ function extractMessage(error: unknown, fallback: string) {
   return fallback
 }
 
+function extractRepoName(url: string) {
+  return url.replace(/\/+$/, '').split('/').slice(-2).join('/')
+}
+
+function slugify(value: string) {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '')
+}
+
 function capitalize(value: string) {
   return value.charAt(0).toUpperCase() + value.slice(1)
+}
+
+function cleanVersion(value: string) {
+  return value.replace(/^[~^]/, '')
 }

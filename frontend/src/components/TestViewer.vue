@@ -17,7 +17,7 @@ async function copyCode() {
   copied.value = true
   window.setTimeout(() => {
     copied.value = false
-  }, 1500)
+  }, 1400)
 }
 
 onMounted(async () => {
@@ -34,10 +34,9 @@ onMounted(async () => {
       language: 'typescript',
       theme: 'vs-dark',
       minimap: { enabled: false },
-      fontSize: 14,
+      fontSize: 13,
       readOnly: true,
       automaticLayout: true,
-      roundedSelection: false,
       scrollBeyondLastLine: false,
     })
   } catch {
@@ -53,19 +52,15 @@ watch(codeValue, (nextValue) => {
 </script>
 
 <template>
-  <article class="card stack-md viewer-card">
-    <div class="viewer-card__header">
-      <div class="stack-sm">
-        <p class="eyebrow">Generated Tests</p>
-        <h2 class="section-title">Result Viewer</h2>
-      </div>
-
-      <button class="secondary-button" type="button" @click="copyCode">
-        {{ copied ? 'Copied' : 'Copy Test' }}
+  <article class="viewer-panel">
+    <div class="viewer-panel__header">
+      <h3>Generated tests</h3>
+      <button class="ghost-button" type="button" @click="copyCode">
+        {{ copied ? 'Copied' : 'Copy test' }}
       </button>
     </div>
 
-    <div v-if="!useFallback" ref="container" class="monaco-host" />
-    <pre v-else class="viewer-pre viewer-pre--code">{{ codeValue }}</pre>
+    <div v-if="!useFallback" ref="container" class="viewer-panel__editor" />
+    <pre v-else class="viewer-panel__body viewer-panel__body--code">{{ codeValue }}</pre>
   </article>
 </template>

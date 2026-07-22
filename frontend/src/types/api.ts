@@ -27,6 +27,13 @@ export interface DocumentationAsset {
   source: string
 }
 
+export interface GraphRelationship {
+  source: string
+  target: string
+  module: string
+  kind: string
+}
+
 export interface RepositoryMetadata {
   repository: string
   statistics: RepositoryStatistics
@@ -34,6 +41,46 @@ export interface RepositoryMetadata {
   packageInfo: PackageInfo | null
   documentation: DocumentationAsset[]
   parsedFiles: ParsedFileSummary[]
+  relationships: GraphRelationship[]
+}
+
+export interface ImpactedComponent {
+  name: string
+  path: string
+  reason: string
+}
+
+export interface ImpactAnalysisRequest {
+  workspaceId: string
+  target: string
+}
+
+export interface ImpactAnalysisResponse {
+  workspaceId: string
+  target: string
+  affectedComponents: ImpactedComponent[]
+  potentiallyAffectedTests: string[]
+  risk: 'low' | 'medium' | 'high'
+  summary: string
+}
+
+export type AIQueryType = 'chat' | 'test_generation'
+
+export interface AIQueryRequest {
+  type: AIQueryType
+  workspaceId: string
+  query?: string
+  target?: string
+  testType?: 'unit' | 'integration' | 'e2e'
+}
+
+export interface AIQueryResponse {
+  type: string
+  workspaceId: string
+  prompt: string
+  markdown: string
+  target?: string
+  testType?: string
 }
 
 export interface GenerateTestsRequest {

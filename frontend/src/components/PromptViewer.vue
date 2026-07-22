@@ -5,12 +5,11 @@ defineProps<{
 </script>
 
 <template>
-  <article class="card stack-md viewer-card">
-    <div class="stack-sm">
-      <p class="eyebrow">Prompt Summary</p>
-      <h2 class="section-title">Prompt Builder Output</h2>
+  <article class="viewer-panel">
+    <div class="viewer-panel__header">
+      <h3>Prompt summary</h3>
     </div>
 
-    <pre class="viewer-pre viewer-pre--prompt">{{ prompt }}</pre>
+    <pre class="viewer-panel__body viewer-panel__body--prompt">{{ prompt }}</pre>
   </article>
 </template>

@@ -14,6 +14,11 @@ from app.services.repository_services import RepositoryService
 
 
 class RepositoryIndexerService:
+    DOCUMENTATION_EXTENSIONS = {
+        ".md", ".mdx", ".txt", ".json", ".yaml", ".yml", ".rst", ".xml", ".csv",
+        ".pdf", ".docx", ".pptx",
+    }
+
     def __init__(
         self,
         repository_service: RepositoryService,
@@ -24,16 +29,25 @@ class RepositoryIndexerService:
         self.parser_service = parser_service
         self.graph_service = graph_service
 
-    def index_repository(self, repository_name: str, repo_path: str) -> RepositoryMetadata:
+    def index_repository(
+        self,
+        repository_name: str,
+        repo_path: str,
+        uploaded_docs: list[DocumentationAsset] | None = None,
+    ) -> RepositoryMetadata:
         scan_result = self.repository_service.scan_repository(repo_path)
-        parsed_files = [
-            self.parser_service.parse(file_info["absolute_path"], file_info["path"])
+        parsed_files = self.parser_service.parse_many(
+            (file_info["absolute_path"], file_info["path"])
             for file_info in scan_result["files"]
-        ]
+        )
         self._attach_existing_tests(parsed_files)
         relationships = self.graph_service.build_relationships(parsed_files)
         package_info = self._load_package_intelligence(repo_path)
         documentation = self._load_documentation(repo_path)
+        if uploaded_docs:
+            uploaded_paths = {asset.path for asset in uploaded_docs}
+            documentation = [asset for asset in documentation if asset.path not in uploaded_paths]
+            documentation.extend(uploaded_docs)
 
         return RepositoryMetadata(
             repository=repository_name,
@@ -128,32 +142,45 @@ class RepositoryIndexerService:
     def _load_documentation(self, repo_path: str) -> list[DocumentationAsset]:
         documentation: list[DocumentationAsset] = []
         direct_files = ["README.md", "architecture.md", "CONTRIBUTING.md"]
-        directory_prefixes = ["docs", "adr"]
+        directory_prefixes = ["docs", "adr", "project_docs"]
 
         for file_name in direct_files:
             file_path = os.path.join(repo_path, file_name)
             if os.path.isfile(file_path):
                 documentation.append(self._read_documentation_asset(repo_path, file_path))
 
-        for root, _, files in os.walk(repo_path):
-            relative_root = os.path.relpath(root, repo_path).replace("\\", "/").lower()
-            if relative_root == ".":
+        for directory_prefix in directory_prefixes:
+            documentation_dir = os.path.join(repo_path, directory_prefix)
+            if not os.path.isdir(documentation_dir):
                 continue
 
-            if not any(relative_root == prefix or relative_root.startswith(f"{prefix}/") for prefix in directory_prefixes):
-                continue
-
-            for file_name in files:
-                file_path = os.path.join(root, file_name)
-                documentation.append(self._read_documentation_asset(repo_path, file_path))
+            for root, dirs, files in os.walk(documentation_dir):
+                dirs[:] = [
+                    directory_name
+                    for directory_name in dirs
+                    if directory_name not in self.repository_service.IGNORE_DIRS
+                ]
+                for file_name in files:
+                    if os.path.splitext(file_name)[1].lower() not in self.DOCUMENTATION_EXTENSIONS:
+                        continue
+                    file_path = os.path.join(root, file_name)
+                    documentation.append(self._read_documentation_asset(repo_path, file_path))
 
         return documentation
 
     def _read_documentation_asset(self, repo_path: str, file_path: str) -> DocumentationAsset:
+        extension = os.path.splitext(file_path)[1].lower()
+        relative_path = os.path.relpath(file_path, repo_path).replace("\\", "/")
+        if extension in {".pdf", ".docx", ".pptx"}:
+            return DocumentationAsset(
+                path=relative_path,
+                source=f"[Document '{os.path.basename(file_path)}' is stored in the workspace; text extraction is not supported.]",
+            )
+
         with open(file_path, "r", encoding="utf-8", errors="ignore") as documentation_file:
             source = documentation_file.read()
 
         return DocumentationAsset(
-            path=os.path.relpath(file_path, repo_path).replace("\\", "/"),
+            path=relative_path,
             source=source,
         )

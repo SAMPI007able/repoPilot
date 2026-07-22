@@ -1,82 +1,179 @@
 import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
-import { generateTests } from '../services/api'
+import { analyzeImpact, generateTests, queryAI } from '../services/api'
 import { useWorkspaceStore } from './workspace'
-import type { GenerateTestsResponse } from '../types/api'
+import type { AIQueryResponse, ImpactAnalysisResponse } from '../types/api'
 
-type GenerationStageStatus = 'idle' | 'active' | 'done'
-
-export interface GenerationStage {
-  id: 'repository' | 'graph' | 'context' | 'prompt' | 'llm' | 'result'
-  label: string
-  status: GenerationStageStatus
-}
-
-function wait(ms: number) {
-  return new Promise((resolve) => window.setTimeout(resolve, ms))
-}
+export type TabId = 'ask' | 'tests' | 'insights' | 'impact'
+export type TestMode = 'scenario' | 'file'
 
 export const useGenerationStore = defineStore('generation', () => {
   const workspaceStore = useWorkspaceStore()
+  const tab = ref<TabId>('ask')
+  const mode = ref<TestMode>('scenario')
   const target = ref('')
   const testType = ref<'unit' | 'integration'>('integration')
-  const isGenerating = ref(false)
+  const genericQuery = ref('')
+  const scenario = ref('')
+  const fileQuery = ref('')
+  const selectedFile = ref('')
+  const fileMenuOpen = ref(false)
+  const impactFile = ref('')
+  const impactBusy = ref(false)
+  const impactError = ref<string | null>(null)
+  const impactResult = ref<ImpactAnalysisResponse | null>(null)
+  const busy = ref(false)
   const error = ref<string | null>(null)
-  const result = ref<GenerateTestsResponse | null>(null)
+  const result = ref<AIQueryResponse | null>(null)
 
-  const stages = ref<GenerationStage[]>([
-    { id: 'repository', label: 'Repository', status: 'idle' },
-    { id: 'graph', label: 'Knowledge Graph', status: 'idle' },
-    { id: 'context', label: 'Context Builder', status: 'idle' },
-    { id: 'prompt', label: 'Prompt Builder', status: 'idle' },
-    { id: 'llm', label: 'Gemini', status: 'idle' },
-    { id: 'result', label: 'Generated Tests', status: 'idle' },
+  const tabs = computed(() => [
+    { id: 'ask' as TabId, label: 'Ask the codebase' },
+    { id: 'tests' as TabId, label: 'Generate tests' },
+    { id: 'insights' as TabId, label: 'Code quality' },
+    { id: 'impact' as TabId, label: 'Impact analysis' },
   ])
 
-  const hasResult = computed(() => Boolean(result.value))
-  const selectedTargetLabel = computed(() => target.value || 'No target selected')
+  const suggestedQuestions = computed(() => [
+    'Explain the payment flow in this project',
+    'How do webhooks verify signatures?',
+    'How does retry & idempotency work?',
+  ])
 
-  async function runGeneration() {
+  const suggestedScenarios = computed(() => [
+    'A customer retries payment after a timeout',
+    'A webhook is delivered twice for the same intent',
+    'A refund is issued for a partially captured payment',
+  ])
+
+  const fileOptions = computed(() => workspaceStore.targetOptions.map((item) => item.path))
+  const filteredFiles = computed(() => {
+    const query = fileQuery.value.trim().toLowerCase()
+    if (!query) {
+      return fileOptions.value
+    }
+
+    return fileOptions.value.filter((file) => file.toLowerCase().includes(query))
+  })
+
+  async function runQuery(text?: string) {
     const workspaceId = workspaceStore.currentWorkspaceId
+    const queryText = (text ?? genericQuery.value).trim()
+    if (!workspaceId) {
+      error.value = 'Build a workspace before asking a query.'
+      return null
+    }
+    if (!queryText) {
+      error.value = 'Ask a question about the current workspace.'
+      return null
+    }
+
+    busy.value = true
+    error.value = null
+    result.value = null
+    genericQuery.value = ''
+
+    try {
+      const response = await queryAI({
+        type: 'chat',
+        workspaceId,
+        query: queryText,
+      })
+      result.value = response
+      return response
+    } catch (caughtError) {
+      error.value = extractMessage(caughtError, 'Failed to run query.')
+      return null
+    } finally {
+      busy.value = false
+    }
+  }
+
+  async function runGenerationFromScenario(text?: string) {
+    const workspaceId = workspaceStore.currentWorkspaceId
+    const nextScenario = (text ?? scenario.value).trim()
     if (!workspaceId) {
       error.value = 'Build a workspace before generating tests.'
       return null
     }
-
-    if (!target.value) {
-      error.value = 'Pick a target file or service first.'
+    // if (!target.value) {
+    //   error.value = 'Select a target module first.'
+    //   return null
+    // }
+    if (!nextScenario) {
+      error.value = 'Describe a scenario first.'
       return null
     }
 
+    busy.value = true
     error.value = null
     result.value = null
-    isGenerating.value = true
-    resetStages()
+    scenario.value = nextScenario
 
     try {
-      await activateStage('repository', 140)
-      await activateStage('graph', 160)
-      await activateStage('context', 180)
-      await activateStage('prompt', 220)
-      setStage('llm', 'active')
-
       const response = await generateTests({
         workspaceId,
         target: target.value,
         type: testType.value,
       })
-
-      setStage('llm', 'done')
-      await activateStage('result', 180)
       result.value = response
       return response
     } catch (caughtError) {
       error.value = extractMessage(caughtError, 'Failed to generate tests.')
-      resetStages()
       return null
     } finally {
-      isGenerating.value = false
+      busy.value = false
     }
+  }
+
+  async function runGenerationFromFile(file?: string) {
+    const nextFile = (file ?? selectedFile.value).trim()
+    const matchingTarget = workspaceStore.targetOptions.find((option) => option.path === nextFile)
+    if (matchingTarget) {
+      target.value = matchingTarget.value
+    }
+    selectedFile.value = nextFile
+    fileMenuOpen.value = false
+    return runGenerationFromScenario(nextFile)
+  }
+
+  async function runImpactAnalysis(file?: string) {
+    const workspaceId = workspaceStore.currentWorkspaceId
+    const nextFile = (file ?? impactFile.value).trim()
+    if (!workspaceId) {
+      impactError.value = 'Build a workspace before running impact analysis.'
+      return null
+    }
+    if (!nextFile) {
+      impactError.value = 'Select a file to analyze.'
+      return null
+    }
+
+    impactBusy.value = true
+    impactError.value = null
+    impactResult.value = null
+    impactFile.value = nextFile
+
+    try {
+      const response = await analyzeImpact({
+        workspaceId,
+        target: nextFile,
+      })
+      impactResult.value = response
+      return response
+    } catch (caughtError) {
+      impactError.value = extractMessage(caughtError, 'Failed to analyze impact.')
+      return null
+    } finally {
+      impactBusy.value = false
+    }
+  }
+
+  function setTab(value: TabId) {
+    tab.value = value
+  }
+
+  function setMode(value: TestMode) {
+    mode.value = value
   }
 
   function setTarget(value: string) {
@@ -87,45 +184,66 @@ export const useGenerationStore = defineStore('generation', () => {
     testType.value = value
   }
 
-  function resetStages() {
-    stages.value = stages.value.map((stage) => ({
-      ...stage,
-      status: 'idle',
-    }))
+  function setGenericQuery(value: string) {
+    genericQuery.value = value
   }
 
-  async function activateStage(id: GenerationStage['id'], duration: number) {
-    setStage(id, 'active')
-    await wait(duration)
-    setStage(id, 'done')
+  function setScenario(value: string) {
+    scenario.value = value
   }
 
-  function setStage(id: GenerationStage['id'], status: GenerationStageStatus) {
-    stages.value = stages.value.map((stage) => ({
-      ...stage,
-      status: stage.id === id ? status : stage.status,
-    }))
+  function setFileQuery(value: string) {
+    fileQuery.value = value
   }
 
-  function clearResult() {
-    result.value = null
-    error.value = null
-    resetStages()
+  function setSelectedFile(value: string) {
+    selectedFile.value = value
+  }
+
+  function setFileMenuOpen(value: boolean) {
+    fileMenuOpen.value = value
+  }
+
+  function setImpactFile(value: string) {
+    impactFile.value = value
   }
 
   return {
+    tab,
+    tabs,
+    mode,
     target,
     testType,
-    isGenerating,
+    genericQuery,
+    scenario,
+    fileQuery,
+    selectedFile,
+    fileMenuOpen,
+    impactFile,
+    impactBusy,
+    impactError,
+    impactResult,
+    busy,
     error,
     result,
-    stages,
-    hasResult,
-    selectedTargetLabel,
-    runGeneration,
+    suggestedQuestions,
+    suggestedScenarios,
+    fileOptions,
+    filteredFiles,
+    runQuery,
+    runGenerationFromScenario,
+    runGenerationFromFile,
+    runImpactAnalysis,
+    setTab,
+    setMode,
     setTarget,
     setTestType,
-    clearResult,
+    setGenericQuery,
+    setScenario,
+    setFileQuery,
+    setSelectedFile,
+    setFileMenuOpen,
+    setImpactFile,
   }
 })
 

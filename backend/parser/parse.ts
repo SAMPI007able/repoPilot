@@ -155,6 +155,21 @@ function extractMetadata(filePath) {
 }
 
 function main() {
+  if (process.argv[2] === "--batch") {
+    const manifestPath = process.argv[3];
+    if (!manifestPath) {
+      throw new Error("Expected a manifest path for batch parsing.");
+    }
+
+    const entries = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+    for (const entry of entries) {
+      const metadata = extractMetadata(path.resolve(entry.file_path));
+      metadata.relative_path = entry.relative_path;
+      process.stdout.write(`${JSON.stringify(metadata)}\n`);
+    }
+    return;
+  }
+
   const filePath = process.argv[2];
 
   if (!filePath) {
