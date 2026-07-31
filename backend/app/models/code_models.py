@@ -52,6 +52,7 @@ class RepositoryMetadata(BaseModel):
     parsedFiles: list[ParsedFileSummary] = Field(default_factory=list)
     parsed_file_details: list[ParsedFile] = Field(default_factory=list, exclude=True)
     relationships: list["GraphRelationship"] = Field(default_factory=list)
+    repositoryFiles: list[str] = Field(default_factory=list)
 
 
 class WorkspaceBuildStage(BaseModel):
@@ -123,6 +124,7 @@ class PackageIntelligence(BaseModel):
     dependencies: dict[str, str] = Field(default_factory=dict)
     devDependencies: dict[str, str] = Field(default_factory=dict)
     scripts: dict[str, str] = Field(default_factory=dict)
+    engines: dict[str, str] = Field(default_factory=dict)
     typescriptVersion: str | None = None
     reactVersion: str | None = None
     vueVersion: str | None = None

@@ -45,6 +45,11 @@ class WorkspaceRow(Base):
     artifacts: Mapped[list["ArtifactRow"]] = relationship(
         back_populates="workspace", cascade="all, delete-orphan"
     )
+    runtime_manifest: Mapped["RuntimeManifestRow | None"] = relationship(
+        back_populates="workspace",
+        cascade="all, delete-orphan",
+        uselist=False,
+    )
 
 
 class WorkspaceBuildRow(Base):
@@ -84,3 +89,33 @@ class ArtifactRow(Base):
     )
 
     workspace: Mapped[WorkspaceRow] = relationship(back_populates="artifacts")
+
+
+class RuntimeManifestRow(Base):
+    __tablename__ = "runtime_manifests"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    workspace_id: Mapped[str] = mapped_column(
+        ForeignKey("workspaces.id", ondelete="CASCADE"),
+        nullable=False,
+        unique=True,
+        index=True,
+    )
+    manifest_version: Mapped[str] = mapped_column(String(16), nullable=False)
+    manifest: Mapped[dict] = mapped_column(JSON_DOCUMENT, nullable=False)
+    analysis_summary: Mapped[dict] = mapped_column(JSON_DOCUMENT, nullable=False)
+    evidence: Mapped[list] = mapped_column(JSON_DOCUMENT, nullable=False, default=list)
+    warnings: Mapped[list] = mapped_column(JSON_DOCUMENT, nullable=False, default=list)
+    unsupported_reasons: Mapped[list] = mapped_column(JSON_DOCUMENT, nullable=False, default=list)
+    supported: Mapped[bool] = mapped_column(nullable=False, default=True)
+    approved: Mapped[bool] = mapped_column(nullable=False, default=False)
+    revision: Mapped[int] = mapped_column(nullable=False, default=1)
+    approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now, onupdate=utc_now
+    )
+
+    workspace: Mapped[WorkspaceRow] = relationship(back_populates="runtime_manifest")

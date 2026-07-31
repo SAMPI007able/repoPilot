@@ -7,6 +7,8 @@ import type {
   ImpactAnalysisResponse,
   PersistedWorkspaceDetail,
   PersistedWorkspaceSummary,
+  RuntimeManifest,
+  RuntimeManifestRecord,
   WorkspaceBuildJob,
 } from '../types/api'
 
@@ -46,6 +48,47 @@ export async function getPersistedWorkspace(workspaceId: string): Promise<Persis
 
 export async function deletePersistedWorkspace(workspaceId: string): Promise<void> {
   await api.delete(`/workspaces/${workspaceId}`)
+}
+
+export async function analyzeRuntimeManifest(
+  workspaceId: string,
+  instructions: string,
+): Promise<RuntimeManifestRecord> {
+  const response = await api.post<RuntimeManifestRecord>(
+    `/workspaces/${workspaceId}/runtime-manifest/analyze`,
+    { instructions: instructions.trim() || null },
+  )
+  return response.data
+}
+
+export async function getRuntimeManifest(workspaceId: string): Promise<RuntimeManifestRecord> {
+  const response = await api.get<RuntimeManifestRecord>(
+    `/workspaces/${workspaceId}/runtime-manifest`,
+  )
+  return response.data
+}
+
+export async function updateRuntimeManifest(
+  workspaceId: string,
+  manifest: RuntimeManifest,
+  expectedRevision: number,
+): Promise<RuntimeManifestRecord> {
+  const response = await api.put<RuntimeManifestRecord>(
+    `/workspaces/${workspaceId}/runtime-manifest`,
+    { manifest, expectedRevision },
+  )
+  return response.data
+}
+
+export async function approveRuntimeManifest(
+  workspaceId: string,
+  expectedRevision: number,
+): Promise<RuntimeManifestRecord> {
+  const response = await api.post<RuntimeManifestRecord>(
+    `/workspaces/${workspaceId}/runtime-manifest/approve`,
+    { expectedRevision },
+  )
+  return response.data
 }
 
 export async function queryAI(payload: AIQueryRequest): Promise<AIQueryResponse> {

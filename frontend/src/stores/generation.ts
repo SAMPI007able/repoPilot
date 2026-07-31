@@ -4,7 +4,7 @@ import { analyzeImpact, generateTests, queryAI } from '../services/api'
 import { useWorkspaceStore } from './workspace'
 import type { AIQueryResponse, ImpactAnalysisResponse } from '../types/api'
 
-export type TabId = 'ask' | 'tests' | 'insights' | 'impact'
+export type TabId = 'ask' | 'tests' | 'preview' | 'insights' | 'impact'
 export type TestMode = 'scenario' | 'file'
 
 export const useGenerationStore = defineStore('generation', () => {
@@ -29,6 +29,7 @@ export const useGenerationStore = defineStore('generation', () => {
   const tabs = computed(() => [
     { id: 'ask' as TabId, label: 'Ask the codebase' },
     { id: 'tests' as TabId, label: 'Generate tests' },
+    { id: 'preview' as TabId, label: 'Realtime preview' },
     { id: 'insights' as TabId, label: 'Code quality' },
     { id: 'impact' as TabId, label: 'Impact analysis' },
   ])

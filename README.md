@@ -9,6 +9,7 @@ Key features
 - Generate unit and integration tests
 - Ask free-form questions against an indexed repository
 - Explore repository dependencies and impact analysis
+- Analyze, review, and approve versioned web runtime manifests in Realtime Preview Lab
 
 Repository layout
 
@@ -51,6 +52,14 @@ Key endpoints:
 Persistence
 
 A checkout exists only while a build is running. After the compressed repository-index artifact is uploaded and checksum-verified, the temporary checkout is removed.
+
+Realtime Preview Lab
+
+Phase 1 provides deterministic Node web runtime analysis, a safe manifest editor, evidence/confidence reporting, policy validation, optimistic revisions, and explicit approval. It does **not** execute repository commands or start previews yet.
+
+See the [Phase 0 architecture assessment](docs/realtime-preview/phase-0-assessment.md), [threat model](docs/realtime-preview/threat-model.md), [runtime-manifest v1 specification](docs/realtime-preview/runtime-manifest-v1.md), and [architecture decisions](docs/realtime-preview/adr/).
+
+> **Security warning:** ordinary Docker isolation is not sufficient for arbitrary hostile public repositories in production. Production execution is intentionally deferred until the Kubernetes/gVisor, network-policy, identity, routing, quota, and reconciliation controls described in Phase 3 exist.
 
 Local development uses SQLite and local compressed artifacts by default. For cloud deployment, set `DATABASE_URL` to PostgreSQL and configure S3-compatible object storage using [backend/.env.example](backend/.env.example). `WORKSPACE_BUILD_JOBS` controls concurrent repository builds, while `WORKSPACE_PARSE_WORKERS` controls parser batches within each build.
 

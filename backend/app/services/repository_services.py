@@ -11,6 +11,13 @@ class RepositoryService:
         'build', '.next', '.nuxt', 'vendor', 'target'
     }
     SUPPORTED_EXTENSIONS = {'.ts', '.tsx', '.js', '.jsx'}
+    RUNTIME_SIGNAL_FILES = {
+        "package.json", "package-lock.json", "npm-shrinkwrap.json",
+        "pnpm-lock.yaml", "yarn.lock", "bun.lock", "bun.lockb",
+        "dockerfile", "docker-compose.yml", "docker-compose.yaml",
+        "compose.yml", "compose.yaml", "procfile", ".nvmrc",
+        ".node-version", ".env.example", ".env.sample",
+    }
 
     def _handle_remove_readonly(self, func, path, exc_info):
         """Error handler for shutil.rmtree to change read-only file permissions and retry."""
@@ -30,6 +37,23 @@ class RepositoryService:
         if repo_name.endswith('.git'):
             repo_name = repo_name[:-4]
         return repo_name
+
+    def validate_public_repository_url(self, git_url: str) -> str:
+        parsed = urllib.parse.urlparse(git_url.strip())
+        if parsed.scheme != "https":
+            raise ValueError("Repository URL must use HTTPS.")
+        if parsed.username or parsed.password:
+            raise ValueError("Repository URL must not contain credentials.")
+        if (parsed.hostname or "").lower() not in {"github.com", "www.github.com"}:
+            raise ValueError("Only public GitHub repository URLs are supported.")
+        if parsed.port not in {None, 443}:
+            raise ValueError("Repository URL must use the standard HTTPS port.")
+        path_segments = [segment for segment in parsed.path.split("/") if segment]
+        if len(path_segments) != 2:
+            raise ValueError("Repository URL must identify a GitHub owner and repository.")
+        if parsed.query or parsed.fragment:
+            raise ValueError("Repository URL must not include query parameters or fragments.")
+        return git_url.strip()
 
     def clone_repository(self, git_url: str, destination_path: str) -> None:
         """
@@ -81,6 +105,7 @@ class RepositoryService:
         Allowed extensions: .ts, .tsx, .js, .jsx
         """
         files_metadata = []
+        runtime_files = []
         total_files = 0
         typescript_count = 0
         javascript_count = 0
@@ -90,6 +115,11 @@ class RepositoryService:
             dirs[:] = [d for d in dirs if d not in self.IGNORE_DIRS]
 
             for file in files:
+                relative_candidate = os.path.relpath(
+                    os.path.join(root, file), repo_path
+                ).replace('\\', '/')
+                if self._is_runtime_signal_file(relative_candidate):
+                    runtime_files.append(relative_candidate)
                 if not self.is_supported_file(file):
                     continue
 
@@ -118,9 +148,18 @@ class RepositoryService:
 
         return {
             "files": files_metadata,
+            "runtime_files": sorted(runtime_files)[:500],
             "stats": {
                 "files": total_files,
                 "typescript": typescript_count,
                 "javascript": javascript_count
             }
         }
+
+    def _is_runtime_signal_file(self, relative_path: str) -> bool:
+        file_name = os.path.basename(relative_path).lower()
+        if file_name in self.RUNTIME_SIGNAL_FILES:
+            return True
+        return file_name.startswith(
+            ("vite.config.", "next.config.", "nuxt.config.", "vue.config.")
+        )

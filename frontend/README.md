@@ -1,5 +1,12 @@
-# Vue 3 + TypeScript + Vite
+# TestForge AI frontend
 
-This template should help get you started developing with Vue 3 and TypeScript in Vite. The template uses Vue 3 `<script setup>` SFCs, check out the [script setup docs](https://v3.vuejs.org/api/sfc-script-setup.html#sfc-script-setup) to learn more.
+Vue 3, TypeScript, Pinia, Axios, and Vite provide the TestForge control-plane UI.
 
-Learn more about the recommended Project Setup and IDE Support in the [Vue Docs TypeScript Guide](https://vuejs.org/guide/typescript/overview.html#project-setup).
+```powershell
+npm install
+npm run dev
+```
+
+Set `VITE_API_BASE_URL` to the FastAPI origin when it differs from the frontend origin. `npm run build` runs Vue TypeScript checking before producing the Vite bundle.
+
+Realtime Preview Lab Phase 1 is a configuration workflow only. It analyzes and approves runtime manifests but does not execute repositories. Future mobile/tablet choices will be labelled as Playwright **emulated profiles**, not physical devices.

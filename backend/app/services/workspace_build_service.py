@@ -48,6 +48,7 @@ class WorkspaceBuildService:
         git_url: str,
         documents: list[tuple[str, bytes]] | None = None,
     ) -> WorkspaceBuildJob:
+        git_url = self.repository_service.validate_public_repository_url(git_url)
         repository_name = self.repository_service.extract_repo_name(git_url)
         if not repository_name:
             raise ValueError("Could not determine a repository name from githubUrl.")

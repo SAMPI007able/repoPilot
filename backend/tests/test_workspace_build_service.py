@@ -17,6 +17,7 @@ from app.services.workspace_build_service import WorkspaceBuildService
 class WorkspaceBuildServiceTests(unittest.TestCase):
     def test_build_runs_in_background_and_exposes_real_stage_progress(self) -> None:
         repository_service = Mock(spec=RepositoryService)
+        repository_service.validate_public_repository_url.side_effect = lambda url: url
         repository_service.extract_repo_name.return_value = "example"
         repository_service.clone_repository.side_effect = lambda _url, path: os.makedirs(path)
         repository_service.get_commit_sha.return_value = "abc123"
@@ -80,6 +81,7 @@ class WorkspaceBuildServiceTests(unittest.TestCase):
 
     def test_cleanup_failure_is_reported_and_does_not_leave_build_locked(self) -> None:
         repository_service = Mock(spec=RepositoryService)
+        repository_service.validate_public_repository_url.side_effect = lambda url: url
         repository_service.extract_repo_name.return_value = "example"
         repository_service.clone_repository.side_effect = lambda _url, path: os.makedirs(path)
         repository_service.get_commit_sha.return_value = "abc123"

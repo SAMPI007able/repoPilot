@@ -60,6 +60,7 @@ class RepositoryIndexerService:
             parsedFiles=[self._summarize_file(parsed_file) for parsed_file in parsed_files],
             parsed_file_details=parsed_files,
             relationships=relationships,
+            repositoryFiles=scan_result.get("runtime_files", []),
         )
 
     def index_repository_parallel(
@@ -167,6 +168,7 @@ class RepositoryIndexerService:
             parsedFiles=[self._summarize_file(parsed_file) for parsed_file in parsed_files],
             parsed_file_details=parsed_files,
             relationships=relationships,
+            repositoryFiles=scan_result.get("runtime_files", []),
         )
         report("finalize", "completed", None)
         return metadata
@@ -230,6 +232,7 @@ class RepositoryIndexerService:
             dependencies=dependencies,
             devDependencies=dev_dependencies,
             scripts=scripts,
+            engines=package_json.get("engines", {}),
             typescriptVersion=combined_dependencies.get("typescript"),
             reactVersion=combined_dependencies.get("react"),
             vueVersion=combined_dependencies.get("vue"),

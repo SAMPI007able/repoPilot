@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { AlertTriangle, FlaskConical, GitCompare, MessageSquareText, Network } from '@lucide/vue'
+import { AlertTriangle, FlaskConical, GitCompare, MessageSquareText, MonitorPlay, Network } from '@lucide/vue'
 import { computed } from 'vue'
 import AskPanel from './AskPanel.vue'
 import BuildPipeline from './BuildPipeline.vue'
@@ -7,6 +7,7 @@ import DependencyGraph from './DependencyGraph.vue'
 import ImpactPanel from './ImpactPanel.vue'
 import InsightsPanel from './InsightsPanel.vue'
 import RepoStatsPanel from './RepoStatsPanel.vue'
+import RealtimePreviewLab from './RealtimePreviewLab.vue'
 import TestGenPanel from './TestGenPanel.vue'
 import { useGenerationStore } from '../stores/generation'
 import type { RepositoryMetadata } from '../types/api'
@@ -34,6 +35,7 @@ const safeMetadata = computed<RepositoryMetadata>(() => ({
   documentation: [],
   parsedFiles: [],
   relationships: [],
+  repositoryFiles: [],
 }))
 
 const repositoryMetadata = computed(() => props.metadata ?? safeMetadata.value)
@@ -49,6 +51,7 @@ const graph = computed(() => createGraphData(repositoryMetadata.value))
 const tabMeta = {
   ask: { label: 'Ask the codebase', icon: MessageSquareText },
   tests: { label: 'Generate tests', icon: FlaskConical },
+  preview: { label: 'Realtime preview', icon: MonitorPlay },
   insights: { label: 'Code quality', icon: AlertTriangle },
   impact: { label: 'Impact analysis', icon: GitCompare },
 } as const
@@ -144,6 +147,11 @@ const insightItems = [] as Array<{ title: string; path: string; severity: string
       @update:file-menu-open="generationStore.setFileMenuOpen"
       @generate:scenario="generationStore.runGenerationFromScenario"
       @generate:file="generationStore.runGenerationFromFile"
+    />
+
+    <RealtimePreviewLab
+      v-else-if="generationStore.tab === 'preview'"
+      :workspace-id="workspace.id"
     />
 
     <InsightsPanel v-else-if="generationStore.tab === 'insights'" :items="insightItems" />

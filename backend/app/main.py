@@ -1,7 +1,11 @@
-from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Body
+from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Body, Request
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from typing import Literal, Optional
 import os
+import uuid
 
 from app.models.code_models import (
     ImpactAnalysisResult,
@@ -15,6 +19,18 @@ from app.persistence.database import Database
 from app.persistence.workspace_persistence_service import (
     WorkspaceBuildInProgressError,
     WorkspacePersistenceService,
+)
+from app.persistence.runtime_manifest_persistence_service import (
+    RuntimeManifestNotFoundError,
+    RuntimeManifestPersistenceService,
+    RuntimeManifestRevisionConflictError,
+)
+from app.models.runtime_manifest_models import (
+    PreviewErrorEnvelope,
+    RuntimeManifestAnalyzeRequest,
+    RuntimeManifestApproveRequest,
+    RuntimeManifestRecord,
+    RuntimeManifestUpdateRequest,
 )
 from app.services.ai.ai_service import AIService
 from app.services.ai.chat_capability import ChatCapability
@@ -35,10 +51,80 @@ from app.services.workspace_build_service import (
     WorkspaceBuildAlreadyRunningError,
     WorkspaceBuildService,
 )
+from app.services.runtime_manifest_analyzer import (
+    DeterministicRuntimeManifestAnalyzer,
+    StructuredAIRuntimeManifestFallback,
+)
+from app.services.runtime_manifest_policy import RuntimeManifestPolicy
+from app.services.runtime_manifest_service import (
+    RuntimeManifestPolicyError,
+    RuntimeManifestService,
+    RuntimeManifestWorkspaceNotReadyError,
+)
 
 from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI(title="TestForge AI")
+
+
+class PreviewLabAPIError(RuntimeError):
+    def __init__(
+        self,
+        status_code: int,
+        code: str,
+        message: str,
+        retryable: bool = False,
+        details: dict | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+        self.code = code
+        self.message = message
+        self.retryable = retryable
+        self.details = details or {}
+
+
+def _correlation_id(request: Request) -> str:
+    return getattr(request.state, "correlation_id", str(uuid.uuid4()))
+
+
+@app.middleware("http")
+async def attach_correlation_id(request: Request, call_next):
+    request.state.correlation_id = request.headers.get("X-Correlation-ID") or str(uuid.uuid4())
+    response = await call_next(request)
+    response.headers["X-Correlation-ID"] = request.state.correlation_id
+    return response
+
+
+@app.exception_handler(PreviewLabAPIError)
+async def handle_preview_lab_error(request: Request, exc: PreviewLabAPIError):
+    envelope = PreviewErrorEnvelope(
+        code=exc.code,
+        message=exc.message,
+        retryable=exc.retryable,
+        details=exc.details,
+        correlationId=_correlation_id(request),
+    )
+    return JSONResponse(
+        status_code=exc.status_code,
+        content=envelope.model_dump(mode="json", by_alias=True),
+    )
+
+
+@app.exception_handler(RequestValidationError)
+async def handle_request_validation(request: Request, exc: RequestValidationError):
+    if "/runtime-manifest" not in request.url.path:
+        return JSONResponse(status_code=422, content={"detail": jsonable_encoder(exc.errors())})
+    envelope = PreviewErrorEnvelope(
+        code="PREVIEW_REQUEST_INVALID",
+        message="The runtime-manifest request is invalid.",
+        details={"errors": jsonable_encoder(exc.errors())},
+        correlationId=_correlation_id(request),
+    )
+    return JSONResponse(
+        status_code=422,
+        content=envelope.model_dump(mode="json", by_alias=True),
+    )
 
 origins = [
     "http://localhost:5173",
@@ -78,6 +164,19 @@ database = Database(os.getenv("DATABASE_URL", f"sqlite:///{default_database_path
 database.create_schema()
 artifact_store = create_artifact_store(os.path.join(PERSISTENCE_DIR, "artifacts"))
 workspace_persistence_service = WorkspacePersistenceService(database, artifact_store)
+runtime_manifest_persistence_service = RuntimeManifestPersistenceService(database)
+runtime_manifest_service = RuntimeManifestService(
+    workspace_persistence_service,
+    runtime_manifest_persistence_service,
+    DeterministicRuntimeManifestAnalyzer(
+        fallback=(
+            StructuredAIRuntimeManifestFallback(ai_provider)
+            if os.getenv("RUNTIME_MANIFEST_AI_FALLBACK", "true").lower() == "true"
+            else None
+        ),
+    ),
+    RuntimeManifestPolicy(),
+)
 workspace_persistence_service.mark_interrupted_builds_failed()
 workspace_build_service = WorkspaceBuildService(
     repo_service,
@@ -212,6 +311,102 @@ def get_workspace(workspace_id: str):
     if workspace is None:
         raise HTTPException(status_code=404, detail=f"Workspace '{workspace_id}' was not found.")
     return workspace
+
+
+def _raise_runtime_manifest_error(exc: Exception) -> None:
+    if isinstance(exc, RuntimeManifestWorkspaceNotReadyError):
+        raise PreviewLabAPIError(
+            409,
+            "WORKSPACE_NOT_READY",
+            "The workspace must finish indexing before runtime analysis.",
+            retryable=True,
+        ) from exc
+    if isinstance(exc, RuntimeManifestNotFoundError):
+        raise PreviewLabAPIError(
+            404,
+            "RUNTIME_MANIFEST_NOT_FOUND",
+            "No runtime manifest has been analyzed for this workspace.",
+        ) from exc
+    if isinstance(exc, RuntimeManifestRevisionConflictError):
+        raise PreviewLabAPIError(
+            409,
+            "RUNTIME_MANIFEST_REVISION_CONFLICT",
+            str(exc),
+            retryable=True,
+        ) from exc
+    if isinstance(exc, RuntimeManifestPolicyError):
+        raise PreviewLabAPIError(
+            422,
+            "RUNTIME_MANIFEST_POLICY_REJECTED",
+            "The runtime manifest violates preview policy.",
+            details={"violations": exc.violations},
+        ) from exc
+    raise PreviewLabAPIError(
+        500,
+        "PREVIEW_INTERNAL_ERROR",
+        "The preview control plane could not complete the request.",
+        retryable=False,
+    ) from exc
+
+
+@app.post(
+    "/workspaces/{workspace_id}/runtime-manifest/analyze",
+    response_model=RuntimeManifestRecord,
+)
+def analyze_runtime_manifest(
+    workspace_id: str,
+    payload: RuntimeManifestAnalyzeRequest,
+):
+    try:
+        return runtime_manifest_service.analyze(workspace_id, payload.instructions)
+    except Exception as exc:
+        _raise_runtime_manifest_error(exc)
+
+
+@app.get(
+    "/workspaces/{workspace_id}/runtime-manifest",
+    response_model=RuntimeManifestRecord,
+)
+def get_runtime_manifest(workspace_id: str):
+    try:
+        return runtime_manifest_service.get(workspace_id)
+    except Exception as exc:
+        _raise_runtime_manifest_error(exc)
+
+
+@app.put(
+    "/workspaces/{workspace_id}/runtime-manifest",
+    response_model=RuntimeManifestRecord,
+)
+def update_runtime_manifest(
+    workspace_id: str,
+    payload: RuntimeManifestUpdateRequest,
+):
+    try:
+        return runtime_manifest_service.update(
+            workspace_id,
+            payload.manifest,
+            payload.expected_revision,
+        )
+    except Exception as exc:
+        _raise_runtime_manifest_error(exc)
+
+
+@app.post(
+    "/workspaces/{workspace_id}/runtime-manifest/approve",
+    response_model=RuntimeManifestRecord,
+)
+def approve_runtime_manifest(
+    workspace_id: str,
+    payload: RuntimeManifestApproveRequest,
+):
+    try:
+        return runtime_manifest_service.approve(
+            workspace_id,
+            payload.expected_revision,
+        )
+    except Exception as exc:
+        _raise_runtime_manifest_error(exc)
 
 
 @app.delete("/workspaces/{workspace_id}", status_code=204)

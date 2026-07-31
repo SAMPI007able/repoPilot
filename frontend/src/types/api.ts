@@ -17,6 +17,7 @@ export interface PackageInfo {
   dependencies: Record<string, string>
   devDependencies: Record<string, string>
   scripts: Record<string, string>
+  engines: Record<string, string>
   typescriptVersion: string | null
   reactVersion: string | null
   vueVersion: string | null
@@ -42,6 +43,85 @@ export interface RepositoryMetadata {
   documentation: DocumentationAsset[]
   parsedFiles: ParsedFileSummary[]
   relationships: GraphRelationship[]
+  repositoryFiles: string[]
+}
+
+export interface RuntimeConfiguration {
+  family: 'node'
+  version: '20' | '22'
+}
+
+export interface RuntimeCommandConfiguration {
+  command: string
+}
+
+export interface RuntimeServiceConfiguration {
+  name: string
+  command: string
+  port: number
+  public: boolean
+  healthcheck: {
+    path: string
+    timeoutSeconds: number
+    intervalSeconds: number
+  }
+}
+
+export interface RuntimeManifest {
+  version: '1'
+  runtime: RuntimeConfiguration
+  repository: { branch: string }
+  install: RuntimeCommandConfiguration
+  build: RuntimeCommandConfiguration
+  services: RuntimeServiceConfiguration[]
+  environment: {
+    required: string[]
+    optional: string[]
+  }
+  resources: {
+    cpuRequest: string
+    cpuLimit: string
+    memoryRequest: string
+    memoryLimit: string
+  }
+  lifecycle: {
+    idleTimeoutMinutes: number
+    maximumLifetimeMinutes: number
+  }
+}
+
+export interface RuntimeManifestEvidence {
+  field: string
+  source: string
+  detail: string
+  confidence: number
+}
+
+export interface RuntimeManifestRecord {
+  workspaceId: string
+  manifest: RuntimeManifest
+  summary: {
+    framework: string
+    packageManager: 'npm' | 'pnpm' | 'yarn'
+    confidence: number
+  }
+  evidence: RuntimeManifestEvidence[]
+  warnings: string[]
+  supported: boolean
+  unsupportedReasons: string[]
+  approved: boolean
+  revision: number
+  createdAt: string
+  updatedAt: string
+  approvedAt: string | null
+}
+
+export interface PreviewErrorEnvelope {
+  code: string
+  message: string
+  retryable: boolean
+  details: Record<string, unknown>
+  correlationId: string
 }
 
 export type WorkspaceBuildStageStatus = 'pending' | 'running' | 'completed' | 'failed'
