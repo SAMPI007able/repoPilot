@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, watch } from 'vue'
-import { CheckCircle2, FlaskConical, Info, ShieldAlert, Sparkles } from '@lucide/vue'
+import { CheckCircle2, Clock3, ExternalLink, FlaskConical, Info, ShieldAlert, Sparkles, Square, Terminal } from '@lucide/vue'
 import { usePreviewStore } from '../stores/preview'
 
 const props = defineProps<{ workspaceId: string }>()
@@ -24,6 +24,14 @@ const optionalEnvironment = computed({
     if (draft.value) draft.value.environment.optional = parseEnvironmentNames(value)
   },
 })
+const pipeline = ['queued', 'cloning', 'installing', 'building', 'starting', 'health_checking', 'ready']
+const currentStage = computed(() => previewStore.activePreview?.status ?? '')
+const canStart = computed(() => record.value?.approved && (!previewStore.activePreview || ['stopped', 'expired', 'failed'].includes(previewStore.activePreview.status)))
+const canStop = computed(() => previewStore.activePreview && !['stopping', 'stopped', 'expired', 'failed'].includes(previewStore.activePreview.status))
+const formattedRemaining = computed(() => {
+  const minutes = Math.floor(previewStore.remainingSeconds / 60)
+  return `${minutes}:${String(previewStore.remainingSeconds % 60).padStart(2, '0')}`
+})
 
 watch(() => props.workspaceId, (workspaceId) => previewStore.load(workspaceId), { immediate: true })
 
@@ -37,14 +45,14 @@ function parseEnvironmentNames(value: string) {
     <div class="panel-heading">
       <div>
         <h2><FlaskConical :size="17" /> Realtime Preview Lab</h2>
-        <p class="preview-lab__subtitle">Analyze and approve a safe runtime manifest before any execution.</p>
+        <p class="preview-lab__subtitle">Analyze, approve, and execute a temporary web preview outside the API process.</p>
       </div>
-      <span class="preview-lab__phase">Phase 1 · configuration only</span>
+      <span class="preview-lab__phase">Phase 2 · trusted local execution</span>
     </div>
 
     <div class="preview-lab__notice">
       <ShieldAlert :size="17" aria-hidden="true" />
-      <span>No repository commands run during analysis. Preview execution remains disabled until a later sandbox phase.</span>
+      <span>Docker execution is for trusted development repositories only. Production hostile-repository isolation requires the Kubernetes/gVisor phase.</span>
     </div>
 
     <div class="preview-lab__analyze">
@@ -111,7 +119,51 @@ function parseEnvironmentNames(value: string) {
         </button>
       </div>
 
-      <div v-if="record.approved" class="preview-lab__approved"><CheckCircle2 :size="17" aria-hidden="true" /> Manifest revision {{ record.revision }} is approved. No preview has been started.</div>
+      <div v-if="record.approved" class="preview-lab__approved"><CheckCircle2 :size="17" aria-hidden="true" /> Manifest revision {{ record.revision }} is approved for preview execution.</div>
+
+      <div v-if="record.approved" class="preview-runtime">
+        <div class="preview-runtime__header">
+          <div><h3>Preview execution</h3><p>Runs at immutable commit <code>{{ previewStore.activePreview?.commitSha.slice(0, 10) ?? 'from workspace' }}</code>.</p></div>
+          <span v-if="previewStore.activePreview" class="preview-runtime__status" :data-status="previewStore.activePreview.status">{{ previewStore.activePreview.status.replace('_', ' ') }}</span>
+        </div>
+
+        <div v-if="record.manifest.environment.required.length || record.manifest.environment.optional.length" class="preview-runtime__environment">
+          <label v-for="name in [...record.manifest.environment.required, ...record.manifest.environment.optional]" :key="name">
+            <span>{{ name }} {{ record.manifest.environment.required.includes(name) ? '· required' : '· optional' }}</span>
+            <input class="input input--mono" type="password" autocomplete="off"
+              :disabled="Boolean(previewStore.activePreview && !['stopped', 'expired', 'failed'].includes(previewStore.activePreview.status))"
+              :value="previewStore.environment[name]" placeholder="Injected once; never persisted"
+              @input="previewStore.setEnvironment(name, ($event.target as HTMLInputElement).value)">
+          </label>
+        </div>
+
+        <div class="preview-runtime__actions">
+          <button class="btn btn-primary" type="button" :disabled="!canStart || previewStore.starting" @click="previewStore.start">{{ previewStore.starting ? 'Queuing...' : 'Start preview' }}</button>
+          <a v-if="previewStore.activePreview?.previewUrl" class="btn btn-ghost" :href="previewStore.activePreview.previewUrl" target="_blank" rel="noopener noreferrer"><ExternalLink :size="15" /> Open preview</a>
+          <button v-if="previewStore.activePreview?.status === 'ready'" class="btn btn-ghost" type="button" :disabled="previewStore.extending" @click="previewStore.extend"><Clock3 :size="15" /> {{ previewStore.extending ? 'Extending...' : `Extend · ${formattedRemaining}` }}</button>
+          <button v-if="canStop" class="btn btn-danger" type="button" :disabled="previewStore.stopping" @click="previewStore.stop"><Square :size="14" /> {{ previewStore.stopping ? 'Stopping...' : 'Stop' }}</button>
+        </div>
+
+        <div v-if="previewStore.activePreview" class="preview-runtime__pipeline" aria-label="Preview lifecycle">
+          <div v-for="(stage, index) in pipeline" :key="stage" class="preview-runtime__stage" :class="{
+            'preview-runtime__stage--active': currentStage === stage,
+            'preview-runtime__stage--done': pipeline.indexOf(currentStage) > index || currentStage === 'ready',
+          }"><span></span><small>{{ stage.replace('_', ' ') }}</small></div>
+        </div>
+
+        <p v-if="previewStore.activePreview?.errorMessage" class="error-text">{{ previewStore.activePreview.errorCode }} · {{ previewStore.activePreview.errorMessage }}</p>
+        <iframe v-if="previewStore.activePreview?.status === 'ready' && previewStore.activePreview.previewUrl"
+          class="preview-runtime__frame" :src="previewStore.activePreview.previewUrl" title="Repository preview"
+          sandbox="allow-forms allow-modals allow-popups allow-same-origin allow-scripts" />
+
+        <details v-if="previewStore.logs || previewStore.events.length" class="preview-runtime__console" open>
+          <summary><Terminal :size="15" /> Execution output</summary>
+          <ol v-if="previewStore.events.length" class="preview-runtime__events">
+            <li v-for="event in previewStore.events" :key="event.id"><time>{{ new Date(event.createdAt).toLocaleTimeString() }}</time>{{ event.message }}</li>
+          </ol>
+          <pre v-if="previewStore.logs">{{ previewStore.logs }}</pre>
+        </details>
+      </div>
 
       <details class="preview-lab__evidence">
         <summary><Info :size="15" aria-hidden="true" /> Analysis evidence</summary>

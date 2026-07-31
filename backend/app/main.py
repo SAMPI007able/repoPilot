@@ -1,11 +1,13 @@
-from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Body, Request
+from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Body, Request, Header
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 from typing import Literal, Optional
 import os
 import uuid
+import asyncio
+import json
 
 from app.models.code_models import (
     ImpactAnalysisResult,
@@ -31,6 +33,19 @@ from app.models.runtime_manifest_models import (
     RuntimeManifestApproveRequest,
     RuntimeManifestRecord,
     RuntimeManifestUpdateRequest,
+)
+from app.models.preview_models import (
+    PreviewCreateRequest,
+    PreviewEnvironment,
+    PreviewExtendRequest,
+    PreviewLogs,
+    PreviewStatus,
+)
+from app.persistence.preview_persistence_service import (
+    PreviewConflictError,
+    PreviewManifestNotApprovedError,
+    PreviewNotFoundError,
+    PreviewPersistenceService,
 )
 from app.services.ai.ai_service import AIService
 from app.services.ai.chat_capability import ChatCapability
@@ -61,6 +76,9 @@ from app.services.runtime_manifest_service import (
     RuntimeManifestService,
     RuntimeManifestWorkspaceNotReadyError,
 )
+from app.services.preview_logs import PreviewLogService
+from app.services.preview_queue import PreviewQueueUnavailableError, RQPreviewJobQueue
+from app.services.preview_service import PreviewEnvironmentValidationError, PreviewService
 
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -113,7 +131,7 @@ async def handle_preview_lab_error(request: Request, exc: PreviewLabAPIError):
 
 @app.exception_handler(RequestValidationError)
 async def handle_request_validation(request: Request, exc: RequestValidationError):
-    if "/runtime-manifest" not in request.url.path:
+    if "/runtime-manifest" not in request.url.path and "/previews" not in request.url.path:
         return JSONResponse(status_code=422, content={"detail": jsonable_encoder(exc.errors())})
     envelope = PreviewErrorEnvelope(
         code="PREVIEW_REQUEST_INVALID",
@@ -176,6 +194,12 @@ runtime_manifest_service = RuntimeManifestService(
         ),
     ),
     RuntimeManifestPolicy(),
+)
+preview_persistence_service = PreviewPersistenceService(database)
+preview_service = PreviewService(
+    preview_persistence_service,
+    RQPreviewJobQueue(),
+    PreviewLogService(artifact_store),
 )
 workspace_persistence_service.mark_interrupted_builds_failed()
 workspace_build_service = WorkspaceBuildService(
@@ -349,6 +373,27 @@ def _raise_runtime_manifest_error(exc: Exception) -> None:
     ) from exc
 
 
+def _raise_preview_error(exc: Exception) -> None:
+    if isinstance(exc, PreviewNotFoundError):
+        raise PreviewLabAPIError(404, "PREVIEW_NOT_FOUND", "The preview was not found.") from exc
+    if isinstance(exc, PreviewManifestNotApprovedError):
+        raise PreviewLabAPIError(409, "PREVIEW_MANIFEST_NOT_APPROVED", str(exc)) from exc
+    if isinstance(exc, PreviewConflictError):
+        raise PreviewLabAPIError(409, "PREVIEW_STATE_CONFLICT", str(exc), retryable=True) from exc
+    if isinstance(exc, PreviewEnvironmentValidationError):
+        raise PreviewLabAPIError(
+            422, "PREVIEW_ENVIRONMENT_INVALID", "The preview environment is invalid.",
+            details={"violations": exc.violations},
+        ) from exc
+    if isinstance(exc, PreviewQueueUnavailableError):
+        raise PreviewLabAPIError(
+            503, "PREVIEW_QUEUE_UNAVAILABLE", str(exc), retryable=True,
+        ) from exc
+    raise PreviewLabAPIError(
+        500, "PREVIEW_INTERNAL_ERROR", "The preview control plane could not complete the request."
+    ) from exc
+
+
 @app.post(
     "/workspaces/{workspace_id}/runtime-manifest/analyze",
     response_model=RuntimeManifestRecord,
@@ -409,9 +454,111 @@ def approve_runtime_manifest(
         _raise_runtime_manifest_error(exc)
 
 
+@app.post(
+    "/workspaces/{workspace_id}/previews",
+    response_model=PreviewEnvironment,
+    status_code=202,
+)
+def create_preview(
+    workspace_id: str,
+    payload: PreviewCreateRequest,
+    idempotency_key: str = Header(alias="Idempotency-Key"),
+):
+    try:
+        return preview_service.create(workspace_id, idempotency_key, payload)
+    except Exception as exc:
+        _raise_preview_error(exc)
+
+
+@app.get("/previews/{preview_id}", response_model=PreviewEnvironment)
+def get_preview(preview_id: str):
+    try:
+        return preview_service.get(preview_id)
+    except Exception as exc:
+        _raise_preview_error(exc)
+
+
+@app.get("/workspaces/{workspace_id}/previews/latest", response_model=PreviewEnvironment)
+def get_latest_preview(workspace_id: str):
+    try:
+        return preview_service.latest_for_workspace(workspace_id)
+    except Exception as exc:
+        _raise_preview_error(exc)
+
+
+@app.get("/previews/{preview_id}/logs", response_model=PreviewLogs)
+def get_preview_logs(preview_id: str):
+    try:
+        return preview_service.logs_for(preview_id)
+    except Exception as exc:
+        _raise_preview_error(exc)
+
+
+@app.get("/previews/{preview_id}/events")
+async def stream_preview_events(preview_id: str, request: Request):
+    try:
+        preview_service.get(preview_id)
+    except Exception as exc:
+        _raise_preview_error(exc)
+
+    async def event_stream():
+        seen: set[str] = set()
+        while not await request.is_disconnected():
+            events = preview_persistence_service.events(preview_id)
+            for event in events:
+                if event.id in seen:
+                    continue
+                seen.add(event.id)
+                payload = json.dumps(event.model_dump(mode="json", by_alias=True))
+                yield f"id: {event.id}\nevent: preview-status\ndata: {payload}\n\n"
+            yield ": keep-alive\n\n"
+            await asyncio.sleep(1)
+
+    return StreamingResponse(
+        event_stream(), media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.post("/previews/{preview_id}/stop", response_model=PreviewEnvironment, status_code=202)
+def stop_preview(
+    preview_id: str,
+    idempotency_key: str = Header(alias="Idempotency-Key"),
+):
+    del idempotency_key
+    try:
+        return preview_service.stop(preview_id)
+    except Exception as exc:
+        _raise_preview_error(exc)
+
+
+@app.post("/previews/{preview_id}/extend", response_model=PreviewEnvironment)
+def extend_preview(
+    preview_id: str,
+    payload: PreviewExtendRequest,
+    idempotency_key: str = Header(alias="Idempotency-Key"),
+):
+    del idempotency_key
+    try:
+        return preview_service.extend(preview_id, payload)
+    except Exception as exc:
+        _raise_preview_error(exc)
+
+
 @app.delete("/workspaces/{workspace_id}", status_code=204)
 def delete_workspace(workspace_id: str):
     try:
+        active_previews = preview_persistence_service.active_for_workspace(workspace_id)
+        if active_previews:
+            for preview in active_previews:
+                preview_service.stop(preview.id)
+            raise HTTPException(
+                status_code=409,
+                detail="Preview cleanup was queued. Remove the workspace after its previews stop.",
+            )
+        preview_ids = preview_persistence_service.ids_for_workspace(workspace_id)
+        for preview_id in preview_ids:
+            artifact_store.delete(PreviewLogService.key(preview_id))
         if not workspace_build_service.delete_workspace(workspace_id):
             raise HTTPException(
                 status_code=404,

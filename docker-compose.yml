@@ -1,0 +1,91 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: testforge
+      POSTGRES_USER: testforge
+      POSTGRES_PASSWORD: testforge-local
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U testforge"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7.4-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    volumes:
+      - redis-data:/data
+
+  api:
+    build: ./backend
+    environment: &backend-environment
+      DATABASE_URL: postgresql://testforge:testforge-local@postgres:5432/testforge
+      REDIS_URL: redis://redis:6379/0
+      ARTIFACT_STORE: local
+      ARTIFACT_LOCAL_ROOT: /app/workspace/artifacts
+      RUNTIME_MANIFEST_AI_FALLBACK: "false"
+      PREVIEW_TRUSTED_LOCAL_EXECUTION: "true"
+      PREVIEW_PUBLIC_HOST: 127.0.0.1
+      PREVIEW_HEALTH_HOST: host.docker.internal
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - "8000:8000"
+    volumes:
+      - preview-artifacts:/app/workspace/artifacts
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health')"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  preview-worker:
+    build: ./backend
+    command: ["rq", "worker", "previews", "--url", "redis://redis:6379/0"]
+    environment: *backend-environment
+    user: root
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      api:
+        condition: service_healthy
+    volumes:
+      - preview-artifacts:/app/workspace/artifacts
+      - /var/run/docker.sock:/var/run/docker.sock
+
+  preview-reconciler:
+    build: ./backend
+    command: ["python", "-m", "app.workers.preview_reconciler"]
+    environment: *backend-environment
+    depends_on:
+      api:
+        condition: service_healthy
+    volumes:
+      - preview-artifacts:/app/workspace/artifacts
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        VITE_API_BASE_URL: http://127.0.0.1:8000
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - "5173:80"
+
+volumes:
+  postgres-data:
+  redis-data:
+  preview-artifacts:

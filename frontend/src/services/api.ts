@@ -7,14 +7,16 @@ import type {
   ImpactAnalysisResponse,
   PersistedWorkspaceDetail,
   PersistedWorkspaceSummary,
+  PreviewEnvironment,
+  PreviewLogs,
   RuntimeManifest,
   RuntimeManifestRecord,
   WorkspaceBuildJob,
 } from '../types/api'
 
-const api = axios.create({
-  baseURL: import.meta.env.VITE_API_BASE_URL,
-})
+export const apiBaseUrl = import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000'
+
+const api = axios.create({ baseURL: apiBaseUrl })
 
 export async function startWorkspaceBuild(
   githubUrl: string,
@@ -89,6 +91,45 @@ export async function approveRuntimeManifest(
     { expectedRevision },
   )
   return response.data
+}
+
+export async function createPreview(
+  workspaceId: string,
+  environment: Record<string, string>,
+  idempotencyKey: string,
+): Promise<PreviewEnvironment> {
+  const response = await api.post<PreviewEnvironment>(
+    `/workspaces/${workspaceId}/previews`,
+    { environment },
+    { headers: { 'Idempotency-Key': idempotencyKey } },
+  )
+  return response.data
+}
+
+export async function getLatestPreview(workspaceId: string): Promise<PreviewEnvironment> {
+  return (await api.get<PreviewEnvironment>(`/workspaces/${workspaceId}/previews/latest`)).data
+}
+
+export async function getPreview(previewId: string): Promise<PreviewEnvironment> {
+  return (await api.get<PreviewEnvironment>(`/previews/${previewId}`)).data
+}
+
+export async function getPreviewLogs(previewId: string): Promise<PreviewLogs> {
+  return (await api.get<PreviewLogs>(`/previews/${previewId}/logs`)).data
+}
+
+export async function stopPreview(previewId: string): Promise<PreviewEnvironment> {
+  return (await api.post<PreviewEnvironment>(
+    `/previews/${previewId}/stop`, {},
+    { headers: { 'Idempotency-Key': crypto.randomUUID() } },
+  )).data
+}
+
+export async function extendPreview(previewId: string, minutes = 30): Promise<PreviewEnvironment> {
+  return (await api.post<PreviewEnvironment>(
+    `/previews/${previewId}/extend`, { minutes },
+    { headers: { 'Idempotency-Key': crypto.randomUUID() } },
+  )).data
 }
 
 export async function queryAI(payload: AIQueryRequest): Promise<AIQueryResponse> {

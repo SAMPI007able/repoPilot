@@ -759,6 +759,16 @@ button {
   border-color: rgba(34, 211, 238, 0.4);
 }
 
+.btn-danger {
+  border-color: rgba(251, 113, 133, 0.35);
+  background: rgba(251, 113, 133, 0.1);
+  color: #fda4af;
+}
+
+.btn-danger:hover {
+  background: rgba(251, 113, 133, 0.18);
+}
+
 .input {
   width: 100%;
   border: 1px solid rgba(58, 74, 114, 0.7);
@@ -1386,6 +1396,173 @@ button {
   line-height: 1.45;
 }
 
+.preview-runtime {
+  display: grid;
+  gap: 0.9rem;
+  border: 1px solid rgba(34, 211, 238, 0.24);
+  border-radius: 0.9rem;
+  background: rgba(5, 12, 24, 0.68);
+  padding: 1rem;
+}
+
+.preview-runtime__header,
+.preview-runtime__actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.preview-runtime__header h3 {
+  margin: 0;
+  color: #f8fafc;
+  font-size: 0.92rem;
+}
+
+.preview-runtime__header p {
+  margin: 0.25rem 0 0;
+  color: var(--muted);
+  font-size: 0.72rem;
+}
+
+.preview-runtime__header code {
+  color: var(--brand-300);
+}
+
+.preview-runtime__status {
+  border: 1px solid rgba(34, 211, 238, 0.35);
+  border-radius: 999px;
+  background: rgba(34, 211, 238, 0.1);
+  padding: 0.3rem 0.65rem;
+  color: var(--brand-300);
+  font-size: 0.68rem;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.preview-runtime__status[data-status="ready"] {
+  border-color: rgba(132, 204, 22, 0.35);
+  background: rgba(132, 204, 22, 0.1);
+  color: var(--accent-400);
+}
+
+.preview-runtime__status[data-status="failed"] {
+  border-color: rgba(251, 113, 133, 0.35);
+  background: rgba(251, 113, 133, 0.1);
+  color: #fda4af;
+}
+
+.preview-runtime__environment {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.7rem;
+}
+
+.preview-runtime__environment label {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.preview-runtime__environment span {
+  color: var(--muted);
+  font-size: 0.68rem;
+}
+
+.preview-runtime__actions {
+  justify-content: flex-start;
+  flex-wrap: wrap;
+}
+
+.preview-runtime__pipeline {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 0.35rem;
+}
+
+.preview-runtime__stage {
+  display: grid;
+  gap: 0.35rem;
+  color: #64748b;
+  font-size: 0.66rem;
+  text-align: center;
+  text-transform: capitalize;
+}
+
+.preview-runtime__stage span {
+  height: 0.28rem;
+  border-radius: 999px;
+  background: #1e293b;
+}
+
+.preview-runtime__stage--active {
+  color: var(--brand-300);
+}
+
+.preview-runtime__stage--active span {
+  background: var(--brand-400);
+  box-shadow: 0 0 12px rgba(34, 211, 238, 0.55);
+}
+
+.preview-runtime__stage--done {
+  color: var(--accent-400);
+}
+
+.preview-runtime__stage--done span {
+  background: var(--accent-500);
+}
+
+.preview-runtime__frame {
+  width: 100%;
+  min-height: 420px;
+  border: 1px solid var(--ink-700);
+  border-radius: 0.75rem;
+  background: white;
+}
+
+.preview-runtime__console {
+  border: 1px solid var(--ink-700);
+  border-radius: 0.7rem;
+  overflow: hidden;
+}
+
+.preview-runtime__console summary {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.65rem 0.75rem;
+  color: #cbd5e1;
+  cursor: pointer;
+  font-size: 0.73rem;
+  font-weight: 600;
+}
+
+.preview-runtime__events {
+  display: grid;
+  gap: 0.35rem;
+  margin: 0;
+  padding: 0.65rem 1rem 0.7rem 2rem;
+  color: #94a3b8;
+  font-size: 0.7rem;
+}
+
+.preview-runtime__events time {
+  display: inline-block;
+  width: 6rem;
+  color: #64748b;
+}
+
+.preview-runtime__console pre {
+  max-height: 16rem;
+  margin: 0;
+  overflow: auto;
+  border-top: 1px solid var(--ink-700);
+  background: #050a13;
+  padding: 0.8rem;
+  color: #a7f3d0;
+  font: 0.68rem/1.55 'JetBrains Mono', monospace;
+  white-space: pre-wrap;
+}
+
 .preview-lab__analyze {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -1819,6 +1996,20 @@ button {
 
   .preview-lab__form-wide {
     grid-column: auto;
+  }
+
+  .preview-runtime__header,
+  .preview-runtime__actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .preview-runtime__environment {
+    grid-template-columns: 1fr;
+  }
+
+  .preview-runtime__pipeline {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .landing__cards,

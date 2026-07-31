@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from sqlalchemy import BigInteger, DateTime, ForeignKey, JSON, String, Text
+from sqlalchemy import BigInteger, DateTime, ForeignKey, JSON, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
@@ -49,6 +49,9 @@ class WorkspaceRow(Base):
         back_populates="workspace",
         cascade="all, delete-orphan",
         uselist=False,
+    )
+    previews: Mapped[list["PreviewEnvironmentRow"]] = relationship(
+        back_populates="workspace", cascade="all, delete-orphan"
     )
 
 
@@ -119,3 +122,54 @@ class RuntimeManifestRow(Base):
     )
 
     workspace: Mapped[WorkspaceRow] = relationship(back_populates="runtime_manifest")
+
+
+class PreviewEnvironmentRow(Base):
+    __tablename__ = "preview_environments"
+    __table_args__ = (
+        UniqueConstraint("workspace_id", "idempotency_key", name="uq_preview_create_idempotency"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    workspace_id: Mapped[str] = mapped_column(
+        ForeignKey("workspaces.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    status: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    repository_url: Mapped[str] = mapped_column(Text, nullable=False)
+    commit_sha: Mapped[str] = mapped_column(String(64), nullable=False)
+    manifest_revision: Mapped[int] = mapped_column(nullable=False)
+    manifest: Mapped[dict] = mapped_column(JSON_DOCUMENT, nullable=False)
+    environment_names: Mapped[list] = mapped_column(JSON_DOCUMENT, nullable=False, default=list)
+    idempotency_key: Mapped[str] = mapped_column(String(128), nullable=False)
+    preview_url: Mapped[str | None] = mapped_column(Text)
+    internal_url: Mapped[str | None] = mapped_column(Text)
+    provider: Mapped[str] = mapped_column(String(32), nullable=False, default="local-docker")
+    provider_state: Mapped[dict] = mapped_column(JSON_DOCUMENT, nullable=False, default=dict)
+    log_storage_key: Mapped[str | None] = mapped_column(Text)
+    error_code: Mapped[str | None] = mapped_column(String(64))
+    error_message: Mapped[str | None] = mapped_column(Text)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    maximum_expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now, onupdate=utc_now)
+    ready_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    stopped_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    workspace: Mapped[WorkspaceRow] = relationship(back_populates="previews")
+    events: Mapped[list["PreviewEventRow"]] = relationship(
+        back_populates="preview", cascade="all, delete-orphan"
+    )
+
+
+class PreviewEventRow(Base):
+    __tablename__ = "preview_events"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    preview_id: Mapped[str] = mapped_column(
+        ForeignKey("preview_environments.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+    message: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now, index=True)
+
+    preview: Mapped[PreviewEnvironmentRow] = relationship(back_populates="events")

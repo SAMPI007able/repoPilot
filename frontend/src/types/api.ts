@@ -124,6 +124,45 @@ export interface PreviewErrorEnvelope {
   correlationId: string
 }
 
+export type PreviewStatus =
+  | 'queued' | 'cloning' | 'installing' | 'building' | 'starting'
+  | 'health_checking' | 'ready' | 'stopping' | 'stopped' | 'expired' | 'failed'
+
+export interface PreviewEnvironment {
+  id: string
+  workspaceId: string
+  status: PreviewStatus
+  repositoryUrl: string
+  commitSha: string
+  manifestRevision: number
+  manifest: RuntimeManifest
+  previewUrl: string | null
+  errorCode: string | null
+  errorMessage: string | null
+  expiresAt: string
+  maximumExpiresAt: string
+  createdAt: string
+  updatedAt: string
+  readyAt: string | null
+  stoppedAt: string | null
+  provider: string
+  developmentWarning: string
+}
+
+export interface PreviewEvent {
+  id: string
+  previewId: string
+  status: PreviewStatus
+  message: string
+  createdAt: string
+}
+
+export interface PreviewLogs {
+  previewId: string
+  content: string
+  truncated: boolean
+}
+
 export type WorkspaceBuildStageStatus = 'pending' | 'running' | 'completed' | 'failed'
 
 export interface WorkspaceBuildStage {

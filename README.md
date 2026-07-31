@@ -9,7 +9,7 @@ Key features
 - Generate unit and integration tests
 - Ask free-form questions against an indexed repository
 - Explore repository dependencies and impact analysis
-- Analyze, review, and approve versioned web runtime manifests in Realtime Preview Lab
+- Analyze, approve, and run temporary trusted-development web previews in Realtime Preview Lab
 
 Repository layout
 
@@ -55,9 +55,9 @@ A checkout exists only while a build is running. After the compressed repository
 
 Realtime Preview Lab
 
-Phase 1 provides deterministic Node web runtime analysis, a safe manifest editor, evidence/confidence reporting, policy validation, optimistic revisions, and explicit approval. It does **not** execute repository commands or start previews yet.
+Phase 2 adds out-of-process RQ execution, durable lifecycle events, a constrained local Docker adapter, real health checks, preview URLs, redacted logs, manual stop, extension, and automatic expiry. FastAPI remains a control plane and never executes repository commands.
 
-See the [Phase 0 architecture assessment](docs/realtime-preview/phase-0-assessment.md), [threat model](docs/realtime-preview/threat-model.md), [runtime-manifest v1 specification](docs/realtime-preview/runtime-manifest-v1.md), and [architecture decisions](docs/realtime-preview/adr/).
+See the [Phase 0 architecture assessment](docs/realtime-preview/phase-0-assessment.md), [Phase 2 local execution guide](docs/realtime-preview/phase-2-trusted-local-execution.md), [threat model](docs/realtime-preview/threat-model.md), [runtime-manifest v1 specification](docs/realtime-preview/runtime-manifest-v1.md), and [architecture decisions](docs/realtime-preview/adr/).
 
 > **Security warning:** ordinary Docker isolation is not sufficient for arbitrary hostile public repositories in production. Production execution is intentionally deferred until the Kubernetes/gVisor, network-policy, identity, routing, quota, and reconciliation controls described in Phase 3 exist.
 
@@ -89,6 +89,16 @@ npm run dev
 ```
 
 The frontend expects the backend at `http://localhost:8000`. The sidebar refreshes persisted workspace status every two seconds and restores ready workspaces on selection.
+
+Trusted local preview stack
+
+With Docker Desktop running, start PostgreSQL, Redis, the API, RQ worker, expiry reconciler, and frontend together:
+
+```powershell
+docker compose up --build
+```
+
+Then open `http://127.0.0.1:5173`. This mode is for trusted development repositories only; keep `PREVIEW_TRUSTED_LOCAL_EXECUTION=false` outside this local stack until the production sandbox phase is complete.
 
 Testing
 

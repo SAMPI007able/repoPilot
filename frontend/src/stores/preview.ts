@@ -1,12 +1,21 @@
 import { ref } from 'vue'
 import { defineStore } from 'pinia'
 import {
+  apiBaseUrl,
   analyzeRuntimeManifest,
   approveRuntimeManifest,
+  createPreview,
+  extendPreview,
+  getLatestPreview,
+  getPreview,
+  getPreviewLogs,
   getRuntimeManifest,
+  stopPreview,
   updateRuntimeManifest,
 } from '../services/api'
-import type { PreviewErrorEnvelope, RuntimeManifest, RuntimeManifestRecord } from '../types/api'
+import type {
+  PreviewEnvironment, PreviewErrorEnvelope, PreviewEvent, RuntimeManifest, RuntimeManifestRecord,
+} from '../types/api'
 
 export const usePreviewStore = defineStore('preview', () => {
   const workspaceId = ref<string | null>(null)
@@ -16,10 +25,24 @@ export const usePreviewStore = defineStore('preview', () => {
   const loading = ref(false)
   const saving = ref(false)
   const approving = ref(false)
+  const starting = ref(false)
+  const stopping = ref(false)
+  const extending = ref(false)
+  const activePreview = ref<PreviewEnvironment | null>(null)
+  const environment = ref<Record<string, string>>({})
+  const events = ref<PreviewEvent[]>([])
+  const logs = ref('')
+  const remainingSeconds = ref(0)
   const error = ref<string | null>(null)
+  let eventSource: EventSource | null = null
+  let countdownTimer: number | null = null
 
   async function load(nextWorkspaceId: string) {
+    disconnectEvents()
     workspaceId.value = nextWorkspaceId
+    activePreview.value = null
+    events.value = []
+    logs.value = ''
     loading.value = true
     error.value = null
     try {
@@ -34,6 +57,7 @@ export const usePreviewStore = defineStore('preview', () => {
     } finally {
       loading.value = false
     }
+    await loadLatest(nextWorkspaceId)
   }
 
   async function analyze() {
@@ -87,6 +111,118 @@ export const usePreviewStore = defineStore('preview', () => {
     }
   }
 
+  async function loadLatest(nextWorkspaceId: string) {
+    try {
+      activePreview.value = await getLatestPreview(nextWorkspaceId)
+      initializeEnvironment()
+      await refreshLogs()
+      if (!isTerminal(activePreview.value.status)) connectEvents(activePreview.value.id)
+      startCountdown()
+    } catch (caughtError) {
+      if (extractStatus(caughtError) !== 404) {
+        error.value = extractPreviewError(caughtError, 'Failed to restore the latest preview.')
+      }
+    }
+  }
+
+  async function start() {
+    if (!workspaceId.value || !record.value?.approved) return
+    starting.value = true
+    error.value = null
+    try {
+      activePreview.value = await createPreview(
+        workspaceId.value, environment.value, crypto.randomUUID(),
+      )
+      events.value = []
+      logs.value = ''
+      connectEvents(activePreview.value.id)
+      startCountdown()
+    } catch (caughtError) {
+      error.value = extractPreviewError(caughtError, 'Failed to start the preview.')
+    } finally {
+      starting.value = false
+    }
+  }
+
+  async function stop() {
+    if (!activePreview.value) return
+    stopping.value = true
+    error.value = null
+    try {
+      activePreview.value = await stopPreview(activePreview.value.id)
+    } catch (caughtError) {
+      error.value = extractPreviewError(caughtError, 'Failed to stop the preview.')
+    } finally {
+      stopping.value = false
+    }
+  }
+
+  async function extend() {
+    if (!activePreview.value) return
+    extending.value = true
+    error.value = null
+    try {
+      activePreview.value = await extendPreview(activePreview.value.id)
+      updateCountdown()
+    } catch (caughtError) {
+      error.value = extractPreviewError(caughtError, 'Failed to extend the preview.')
+    } finally {
+      extending.value = false
+    }
+  }
+
+  function initializeEnvironment() {
+    if (!record.value) return
+    const names = [...record.value.manifest.environment.required, ...record.value.manifest.environment.optional]
+    environment.value = Object.fromEntries(names.map((name) => [name, environment.value[name] ?? '']))
+  }
+
+  function setEnvironment(name: string, value: string) {
+    environment.value[name] = value
+  }
+
+  function connectEvents(previewId: string) {
+    disconnectEvents()
+    eventSource = new EventSource(`${apiBaseUrl}/previews/${previewId}/events`)
+    eventSource.addEventListener('preview-status', async (rawEvent) => {
+      const event = JSON.parse((rawEvent as MessageEvent).data) as PreviewEvent
+      if (!events.value.some((item) => item.id === event.id)) events.value.push(event)
+      activePreview.value = await getPreview(previewId)
+      await refreshLogs()
+      updateCountdown()
+      if (isTerminal(activePreview.value.status)) disconnectEvents()
+    })
+    eventSource.onerror = () => {
+      // EventSource reconnects automatically; durable events fill any missed transitions.
+    }
+  }
+
+  async function refreshLogs() {
+    if (!activePreview.value) return
+    try {
+      logs.value = (await getPreviewLogs(activePreview.value.id)).content
+    } catch {
+      // Logs are auxiliary; lifecycle state remains authoritative.
+    }
+  }
+
+  function startCountdown() {
+    if (countdownTimer !== null) window.clearInterval(countdownTimer)
+    updateCountdown()
+    countdownTimer = window.setInterval(updateCountdown, 1000)
+  }
+
+  function updateCountdown() {
+    remainingSeconds.value = activePreview.value
+      ? Math.max(0, Math.floor((new Date(activePreview.value.expiresAt).getTime() - Date.now()) / 1000))
+      : 0
+  }
+
+  function disconnectEvents() {
+    eventSource?.close()
+    eventSource = null
+  }
+
   function setInstructions(value: string) {
     instructions.value = value
   }
@@ -94,6 +230,7 @@ export const usePreviewStore = defineStore('preview', () => {
   function setRecord(nextRecord: RuntimeManifestRecord) {
     record.value = nextRecord
     draft.value = structuredClone(nextRecord.manifest)
+    initializeEnvironment()
   }
 
   return {
@@ -104,14 +241,30 @@ export const usePreviewStore = defineStore('preview', () => {
     loading,
     saving,
     approving,
+    starting,
+    stopping,
+    extending,
+    activePreview,
+    environment,
+    events,
+    logs,
+    remainingSeconds,
     error,
     load,
     analyze,
     save,
     approve,
+    start,
+    stop,
+    extend,
+    setEnvironment,
     setInstructions,
   }
 })
+
+function isTerminal(status: string) {
+  return ['stopped', 'expired', 'failed'].includes(status)
+}
 
 function extractStatus(error: unknown) {
   if (typeof error === 'object' && error && 'response' in error) {
