@@ -1,10 +1,26 @@
 <script setup lang="ts">
+import { onMounted, onUnmounted } from 'vue'
 import Landing from '../components/Landing.vue'
 import Sidebar from '../components/Sidebar.vue'
 import WorkspaceView from '../components/WorkspaceView.vue'
 import { useWorkspaceStore } from '../stores/workspace'
 
 const workspaceStore = useWorkspaceStore()
+
+let workspaceRefreshTimer: number | null = null
+
+onMounted(() => {
+  workspaceStore.loadWorkspaces()
+  workspaceRefreshTimer = window.setInterval(() => {
+    workspaceStore.loadWorkspaces(false)
+  }, 2000)
+})
+
+onUnmounted(() => {
+  if (workspaceRefreshTimer !== null) {
+    window.clearInterval(workspaceRefreshTimer)
+  }
+})
 </script>
 
 <template>
@@ -13,7 +29,9 @@ const workspaceStore = useWorkspaceStore()
       :workspaces="workspaceStore.workspaces"
       :active-id="workspaceStore.activeId"
       :loading="workspaceStore.loadingList"
+      :removing-ids="workspaceStore.removingIds"
       @select="workspaceStore.selectWorkspace"
+      @remove="workspaceStore.removeWorkspace"
       @new="workspaceStore.startNewWorkspace"
     />
 

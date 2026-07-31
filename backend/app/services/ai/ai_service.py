@@ -20,5 +20,17 @@ class AIService:
     def generate_tests(self, repository_metadata, target: str, test_type: str) -> tuple[str, str]:
         return self.test_generation_capability.execute(repository_metadata, target, test_type)
 
+    def generate_tests_from_scenario(
+        self,
+        repository_metadata,
+        scenario: str,
+        test_type: str,
+    ) -> tuple[str, str]:
+        return self.test_generation_capability.execute_scenario(
+            repository_metadata,
+            scenario,
+            test_type,
+        )
+
     def documentation_query(self, repository_metadata, query: str) -> tuple[str, str]:
         return self.documentation_capability.execute(repository_metadata, query)

@@ -44,6 +44,41 @@ export interface RepositoryMetadata {
   relationships: GraphRelationship[]
 }
 
+export type WorkspaceBuildStageStatus = 'pending' | 'running' | 'completed' | 'failed'
+
+export interface WorkspaceBuildStage {
+  id: string
+  label: string
+  detail: string
+  status: WorkspaceBuildStageStatus
+}
+
+export interface WorkspaceBuildJob {
+  jobId: string
+  workspaceId: string
+  status: 'queued' | 'running' | 'completed' | 'failed'
+  stages: WorkspaceBuildStage[]
+  metadata: RepositoryMetadata | null
+  error: string | null
+}
+
+export interface PersistedWorkspaceSummary {
+  id: string
+  jobId: string | null
+  repoUrl: string
+  repoName: string
+  status: 'queued' | 'running' | 'ready' | 'failed'
+  statistics: RepositoryStatistics
+  stages: WorkspaceBuildStage[]
+  error: string | null
+  createdAt: string
+  updatedAt: string
+}
+
+export interface PersistedWorkspaceDetail extends PersistedWorkspaceSummary {
+  metadata: RepositoryMetadata
+}
+
 export interface ImpactedComponent {
   name: string
   path: string
@@ -71,6 +106,8 @@ export interface AIQueryRequest {
   workspaceId: string
   query?: string
   target?: string
+  scenario?: string
+  generationMode?: 'file' | 'scenario'
   testType?: 'unit' | 'integration' | 'e2e'
 }
 
@@ -85,7 +122,9 @@ export interface AIQueryResponse {
 
 export interface GenerateTestsRequest {
   workspaceId: string
-  target: string
+  mode: 'file' | 'scenario'
+  target?: string
+  scenario?: string
   type: 'unit' | 'integration'
 }
 

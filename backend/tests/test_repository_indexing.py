@@ -1,8 +1,10 @@
 import os
 import tempfile
 import unittest
+from threading import Barrier
 from unittest.mock import Mock
 
+from app.models.code_models import ParsedFile
 from app.services.graph_services import GraphService
 from app.services.parser_services import ParserService
 from app.services.repository_indexer_service import RepositoryIndexerService
@@ -69,6 +71,48 @@ class RepositoryIndexerServiceTests(unittest.TestCase):
             assets = indexer._load_documentation(repo_path)
 
         self.assertEqual([(asset.path, asset.source) for asset in assets], [("docs/guide.md", "Guide")])
+
+    def test_parallel_indexing_fans_parsing_out_across_workers(self) -> None:
+        repository_service = Mock(spec=RepositoryService)
+        repository_service.scan_repository.return_value = {
+            "files": [
+                {
+                    "absolute_path": os.path.abspath(f"file-{index}.ts"),
+                    "path": f"file-{index}.ts",
+                }
+                for index in range(6)
+            ],
+            "stats": {"files": 6, "typescript": 6, "javascript": 0},
+        }
+        parser_service = Mock(spec=ParserService)
+        parser_barrier = Barrier(3)
+
+        def parse_batch(files):
+            batch = list(files)
+            parser_barrier.wait(timeout=3)
+            return [
+                ParsedFile(path=relative_path, file=os.path.basename(relative_path), source_code="")
+                for _, relative_path in batch
+            ]
+
+        parser_service.parse_many.side_effect = parse_batch
+        indexer = RepositoryIndexerService(repository_service, parser_service, GraphService())
+        indexer._load_documentation = Mock(return_value=[])
+        indexer._load_package_intelligence = Mock(return_value=None)
+        progress_events: list[tuple[str, str]] = []
+
+        metadata = indexer.index_repository_parallel(
+            "example",
+            os.getcwd(),
+            progress=lambda stage, status, _detail=None: progress_events.append((stage, status)),
+            parse_workers=3,
+        )
+
+        self.assertEqual(parser_service.parse_many.call_count, 3)
+        self.assertEqual(len(metadata.parsedFiles), 6)
+        for worker_index in range(1, 4):
+            self.assertIn((f"parse_{worker_index}", "running"), progress_events)
+            self.assertIn((f"parse_{worker_index}", "completed"), progress_events)
 
 
 if __name__ == "__main__":

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Check, LoaderCircle } from '@lucide/vue'
+import { Check, CircleX, LoaderCircle } from '@lucide/vue'
 import { computed } from 'vue'
 import type { WorkspaceStage } from '../stores/workspace'
 
@@ -7,18 +7,8 @@ const props = defineProps<{
   stages: WorkspaceStage[]
 }>()
 
-const normalizedStages = computed(() => {
-  const allBeforeReadyDone = props.stages
-    .filter((stage) => stage.id !== 'ready')
-    .every((stage) => stage.status === 'done')
-
-  return props.stages.map((stage) => ({
-    ...stage,
-    status: stage.id === 'ready' && allBeforeReadyDone ? 'done' : stage.status,
-  }))
-})
-
-const isComplete = computed(() => normalizedStages.value.every((stage) => stage.status === 'done'))
+const isComplete = computed(() => props.stages.length > 0 && props.stages.every((stage) => stage.status === 'done'))
+const hasFailed = computed(() => props.stages.some((stage) => stage.status === 'failed'))
 </script>
 
 <template>
@@ -27,12 +17,12 @@ const isComplete = computed(() => normalizedStages.value.every((stage) => stage.
       <div>
         <h2>Build pipeline</h2>
       </div>
-      <span class="panel-heading__meta">{{ isComplete ? 'Complete' : 'In progress' }}</span>
+      <span class="panel-heading__meta">{{ hasFailed ? 'Failed' : isComplete ? 'Complete' : 'In progress' }}</span>
     </div>
 
     <div class="pipeline-list">
       <div
-        v-for="(stage, index) in normalizedStages"
+        v-for="(stage, index) in stages"
         :key="stage.id"
         class="pipeline-row"
         :class="`pipeline-row--${stage.status}`"
@@ -40,6 +30,7 @@ const isComplete = computed(() => normalizedStages.value.every((stage) => stage.
         <div class="pipeline-row__info">
           <span class="pipeline-row__dot">
             <Check v-if="stage.status === 'done'" :size="14" />
+            <CircleX v-else-if="stage.status === 'failed'" :size="14" />
             <LoaderCircle v-else-if="stage.status === 'active'" :size="14" class="pipeline-row__spinner" />
             <span v-else class="pipeline-row__number">{{ index + 1 }}</span>
           </span>

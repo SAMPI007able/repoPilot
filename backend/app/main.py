@@ -3,7 +3,19 @@ from pydantic import BaseModel
 from typing import Literal, Optional
 import os
 
-from app.models.code_models import DocumentationAsset, ImpactAnalysisResult, RepositoryMetadata
+from app.models.code_models import (
+    ImpactAnalysisResult,
+    RepositoryMetadata,
+    WorkspaceBuildJob,
+    WorkspaceDetail,
+    WorkspaceSummary,
+)
+from app.persistence.artifact_store import create_artifact_store
+from app.persistence.database import Database
+from app.persistence.workspace_persistence_service import (
+    WorkspaceBuildInProgressError,
+    WorkspacePersistenceService,
+)
 from app.services.ai.ai_service import AIService
 from app.services.ai.chat_capability import ChatCapability
 from app.services.ai.documentation_capability import DocumentationCapability
@@ -19,6 +31,10 @@ from app.services.prompt_builder_service import PromptBuilderService
 from app.services.repository_services import RepositoryService
 from app.services.parser_services import ParserService
 from app.services.repository_indexer_service import RepositoryIndexerService
+from app.services.workspace_build_service import (
+    WorkspaceBuildAlreadyRunningError,
+    WorkspaceBuildService,
+)
 
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -54,52 +70,34 @@ ai_service = AIService(chat_capability, test_generation_capability, documentatio
 
 # ── Workspace directory ──────────────────────────────────────────────────────
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-WORKSPACE_DIR = os.path.join(BASE_DIR, "workspace/repositories")
+PERSISTENCE_DIR = os.path.join(BASE_DIR, "workspace")
+WORKSPACE_DIR = os.path.join(PERSISTENCE_DIR, "checkouts")
 os.makedirs(WORKSPACE_DIR, exist_ok=True)
+default_database_path = os.path.join(PERSISTENCE_DIR, "testforge.db").replace("\\", "/")
+database = Database(os.getenv("DATABASE_URL", f"sqlite:///{default_database_path}"))
+database.create_schema()
+artifact_store = create_artifact_store(os.path.join(PERSISTENCE_DIR, "artifacts"))
+workspace_persistence_service = WorkspacePersistenceService(database, artifact_store)
+workspace_persistence_service.mark_interrupted_builds_failed()
+workspace_build_service = WorkspaceBuildService(
+    repo_service,
+    repository_indexer,
+    WORKSPACE_DIR,
+    workspace_persistence_service,
+    max_parallel_jobs=int(os.getenv("WORKSPACE_BUILD_JOBS", "1")),
+    parse_workers=int(os.getenv("WORKSPACE_PARSE_WORKERS", "3")),
+)
+
+
+@app.on_event("shutdown")
+def shutdown_workspace_builds() -> None:
+    workspace_build_service.shutdown()
+    database.close()
 
 
 # ── Request / Response models ────────────────────────────────────────────────
 class IndexRequest(BaseModel):
     githubUrl: str
-
-
-def _save_project_documents(
-    workspace_path: str,
-    project_docs: list[UploadFile] | None,
-) -> list[DocumentationAsset]:
-    if not project_docs:
-        return []
-
-    documentation_dir = os.path.join(workspace_path, 'project_docs')
-    os.makedirs(documentation_dir, exist_ok=True)
-
-    assets: list[DocumentationAsset] = []
-    for upload in project_docs:
-        filename = os.path.basename(upload.filename)
-        target_path = os.path.join(documentation_dir, filename)
-        contents = upload.file.read()
-
-        with open(target_path, 'wb') as saved_file:
-            saved_file.write(contents)
-
-        ext = os.path.splitext(filename)[1].lower()
-        if ext in {'.md', '.txt', '.json', '.yaml', '.yml', '.rst', '.xml', '.csv'}:
-            source = contents.decode('utf-8', errors='ignore')
-        elif ext == '.pdf':
-            source = f"[Uploaded PDF document '{filename}' saved to project_docs. Text extraction is not yet supported.]"
-        elif ext in {'.docx', '.pptx'}:
-            source = f"[Uploaded document '{filename}' saved to project_docs. Text extraction is not yet supported.]"
-        else:
-            source = contents.decode('utf-8', errors='ignore')
-
-        assets.append(
-            DocumentationAsset(
-                path=os.path.relpath(target_path, workspace_path).replace('\\', '/'),
-                source=source,
-            )
-        )
-
-    return assets
 
 
 class QueryRequest(BaseModel):
@@ -112,13 +110,17 @@ class QueryRequest(BaseModel):
 
     type = "test_generation"
         • workspaceId — the indexed repository
-        • target      — file name or class name to generate tests for
+        • generationMode — "file" or "scenario" (defaults to "file")
+        • target      — required only for file mode
+        • scenario    — requirement/behavior text required only for scenario mode
         • testType    — e.g. "unit", "integration", "e2e"
     """
     type: Literal["chat", "test_generation"]
     workspaceId: str
     query: Optional[str] = None      # used by chat
     target: Optional[str] = None     # used by test_generation
+    scenario: Optional[str] = None   # used by scenario-based test_generation
+    generationMode: Literal["file", "scenario"] = "file"
     testType: Optional[str] = None   # used by test_generation
 
 
@@ -154,14 +156,13 @@ class GenerateTestsResponse(BaseModel):
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 def _load_workspace(workspace_id: str) -> tuple[str, RepositoryMetadata]:
-    workspace_path = os.path.join(WORKSPACE_DIR, workspace_id)
-    if not os.path.isdir(workspace_path):
+    metadata = workspace_build_service.get_completed_metadata(workspace_id)
+    if metadata is None:
         raise HTTPException(
             status_code=404,
-            detail=f"Workspace '{workspace_id}' not found. Index it first via POST /workspaces/index.",
+            detail=f"Persisted workspace '{workspace_id}' was not found or is not ready.",
         )
-    metadata = repository_indexer.index_repository(workspace_id, workspace_path)
-    return workspace_path, metadata
+    return "", metadata
 
 
 # ── Routes ───────────────────────────────────────────────────────────────────
@@ -170,7 +171,7 @@ def health():
     return {"status": "ok"}
 
 
-@app.post("/workspaces/index", response_model=RepositoryMetadata)
+@app.post("/workspaces/index", response_model=WorkspaceBuildJob, status_code=202)
 def index_workspace(
     githubUrl: str | None = Form(None),
     project_docs: list[UploadFile] | None = File(default=None),
@@ -181,13 +182,48 @@ def index_workspace(
         raise HTTPException(status_code=400, detail="githubUrl is required")
 
     try:
-        repo_name = repo_service.extract_repo_name(git_url)
-        destination_path = os.path.join(WORKSPACE_DIR, repo_name)
-        repo_service.clone_repository(git_url, destination_path)
-        uploaded_docs = _save_project_documents(destination_path, project_docs)
-        return repository_indexer.index_repository(repo_name, destination_path, uploaded_docs=uploaded_docs)
+        documents = [
+            (upload.filename or "project-document", upload.file.read())
+            for upload in (project_docs or [])
+        ]
+        return workspace_build_service.start_build(git_url, documents)
+    except WorkspaceBuildAlreadyRunningError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to index workspace: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to start workspace build: {str(e)}")
+
+
+@app.get("/workspaces/index/{job_id}", response_model=WorkspaceBuildJob)
+def get_workspace_build(job_id: str):
+    job = workspace_build_service.get_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail=f"Workspace build job '{job_id}' was not found.")
+    return job
+
+
+@app.get("/workspaces", response_model=list[WorkspaceSummary])
+def list_workspaces():
+    return workspace_build_service.list_workspaces()
+
+
+@app.get("/workspaces/{workspace_id}", response_model=WorkspaceDetail)
+def get_workspace(workspace_id: str):
+    workspace = workspace_build_service.get_workspace(workspace_id)
+    if workspace is None:
+        raise HTTPException(status_code=404, detail=f"Workspace '{workspace_id}' was not found.")
+    return workspace
+
+
+@app.delete("/workspaces/{workspace_id}", status_code=204)
+def delete_workspace(workspace_id: str):
+    try:
+        if not workspace_build_service.delete_workspace(workspace_id):
+            raise HTTPException(
+                status_code=404,
+                detail=f"Workspace '{workspace_id}' was not found.",
+            )
+    except WorkspaceBuildInProgressError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @app.post("/ai/query", response_model=QueryResponse)
@@ -215,18 +251,36 @@ def ai_query(payload: QueryRequest):
             )
 
         elif payload.type == "test_generation":
-            if not payload.target:
-                raise HTTPException(status_code=400, detail="target is required for type=test_generation")
-
             test_type = payload.testType or "unit"
-            prompt, markdown = ai_service.generate_tests(repository_metadata, payload.target, test_type)
+            if payload.generationMode == "scenario":
+                if not payload.scenario or not payload.scenario.strip():
+                    raise HTTPException(
+                        status_code=400,
+                        detail="scenario is required for scenario test generation",
+                    )
+                prompt, markdown = ai_service.generate_tests_from_scenario(
+                    repository_metadata,
+                    payload.scenario.strip(),
+                    test_type,
+                )
+            else:
+                if not payload.target:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="target is required for file test generation",
+                    )
+                prompt, markdown = ai_service.generate_tests(
+                    repository_metadata,
+                    payload.target,
+                    test_type,
+                )
 
             return QueryResponse(
                 type="test_generation",
                 workspaceId=payload.workspaceId,
                 prompt=prompt,
                 markdown=markdown,
-                target=payload.target,
+                target=payload.target or payload.scenario,
                 testType=test_type,
             )
 

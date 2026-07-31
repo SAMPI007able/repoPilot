@@ -29,3 +29,17 @@ class TestGenerationCapability(AICapability):
         )
         prompt = self.prompt_builder.build_prompt(context)
         return prompt, self.provider.generate(prompt)
+
+    def execute_scenario(
+        self,
+        repository_metadata: RepositoryMetadata,
+        scenario: str,
+        test_type: str,
+    ) -> tuple[str, str]:
+        context = self.context_builder.build_scenario_context(
+            repository_metadata=repository_metadata,
+            scenario=scenario,
+            test_type=test_type,
+        )
+        prompt = self.prompt_builder.build_scenario_prompt(context)
+        return prompt, self.provider.generate(prompt)

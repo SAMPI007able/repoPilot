@@ -1,9 +1,19 @@
 import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
-import { buildWorkspace } from '../services/api'
-import type { RepositoryMetadata } from '../types/api'
+import {
+  deletePersistedWorkspace,
+  getPersistedWorkspace,
+  getWorkspaceBuild,
+  listPersistedWorkspaces,
+  startWorkspaceBuild,
+} from '../services/api'
+import type {
+  PersistedWorkspaceSummary,
+  RepositoryMetadata,
+  WorkspaceBuildStage,
+} from '../types/api'
 
-export type WorkspaceStatus = 'pending' | 'indexing' | 'graphing' | 'analyzing' | 'ready'
+export type WorkspaceStatus = 'pending' | 'building' | 'ready' | 'failed'
 
 export interface WorkspaceListItem {
   id: string
@@ -12,13 +22,15 @@ export interface WorkspaceListItem {
   status: WorkspaceStatus
   docs: string[]
   metadata: RepositoryMetadata | null
+  jobId: string | null
+  stages: WorkspaceStage[]
 }
 
 export interface WorkspaceStage {
-  id: 'pending' | 'indexing' | 'graphing' | 'analyzing' | 'ready'
+  id: string
   label: string
   detail: string
-  status: 'upcoming' | 'active' | 'done'
+  status: 'upcoming' | 'active' | 'done' | 'failed'
 }
 
 function wait(ms: number) {
@@ -32,11 +44,15 @@ export const useWorkspaceStore = defineStore('workspace', () => {
   const activeId = ref<string | null>(null)
   const loadingList = ref(false)
   const busy = ref(false)
+  const removingIds = ref<string[]>([])
   const error = ref<string | null>(null)
+  const removedWorkspaceIds = new Set<string>()
 
   const activeWorkspace = computed(() => workspaces.value.find((workspace) => workspace.id === activeId.value) ?? null)
   const metadata = computed(() => activeWorkspace.value?.metadata ?? null)
-  const currentWorkspaceId = computed(() => activeWorkspace.value?.metadata?.repository ?? null)
+  const currentWorkspaceId = computed(() =>
+    activeWorkspace.value?.status === 'ready' ? activeWorkspace.value.id : null,
+  )
 
   const frameworkLabel = computed(() => {
     const value = metadata.value
@@ -54,29 +70,40 @@ export const useWorkspaceStore = defineStore('workspace', () => {
   })
 
   const pipelineStages = computed<WorkspaceStage[]>(() => {
-    const order: WorkspaceStage['id'][] = ['pending', 'indexing', 'graphing', 'analyzing', 'ready']
-    const labels: Record<WorkspaceStage['id'], Omit<WorkspaceStage, 'status'>> = {
-      pending: { id: 'pending', label: 'Repository clone', detail: 'Cloning workspace source' },
-      indexing: { id: 'indexing', label: 'Indexing', detail: 'Parsing files & symbols' },
-      graphing: { id: 'graphing', label: 'Graph construction', detail: 'Resolving dependencies' },
-      analyzing: { id: 'analyzing', label: 'Repository analysis', detail: 'Coupling, complexity, coverage' },
-      ready: { id: 'ready', label: 'Ready', detail: 'Workspace built' },
-    }
-
-    const workspaceStatus = activeWorkspace.value?.status ?? 'pending'
-    const activeIndex = order.indexOf(workspaceStatus)
-
-    return order.map((id, index) => ({
-      ...labels[id],
-      status: workspaceStatus === 'ready'
-        ? 'done'
-        : index < activeIndex
-          ? 'done'
-          : index === activeIndex
-            ? 'active'
-            : 'upcoming',
-    }))
+    return activeWorkspace.value?.stages ?? initialStages()
   })
+
+  async function loadWorkspaces(showLoading = true) {
+    if (showLoading) {
+      loadingList.value = true
+    }
+    error.value = null
+    try {
+      const persistedWorkspaces = await listPersistedWorkspaces()
+      const existingById = new Map(workspaces.value.map((workspace) => [workspace.id, workspace]))
+      const refreshed = persistedWorkspaces
+        .filter((workspace) => !removedWorkspaceIds.has(workspace.id))
+        .map((persistedWorkspace) => {
+          const mapped = mapPersistedWorkspace(persistedWorkspace)
+          const existing = existingById.get(mapped.id)
+          return existing
+            ? {
+                ...mapped,
+                docs: existing.docs,
+                metadata: existing.metadata,
+              }
+            : mapped
+        })
+      const pendingLocalWorkspaces = workspaces.value.filter((workspace) => workspace.id.startsWith('pending-'))
+      workspaces.value = [...pendingLocalWorkspaces, ...refreshed]
+    } catch (caughtError) {
+      error.value = extractMessage(caughtError, 'Failed to load persisted workspaces.')
+    } finally {
+      if (showLoading) {
+        loadingList.value = false
+      }
+    }
+  }
 
   const targetOptions = computed(() => {
     if (!metadata.value) {
@@ -104,7 +131,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     busy.value = true
     error.value = null
 
-    const workspaceId = slugify(repositoryUrl.value)
+    let workspaceId = `pending-${slugify(repositoryUrl.value)}-${Date.now()}`
     const nextWorkspace: WorkspaceListItem = {
       id: workspaceId,
       repoName: extractRepoName(repositoryUrl.value),
@@ -112,26 +139,46 @@ export const useWorkspaceStore = defineStore('workspace', () => {
       status: 'pending',
       docs: projectDocuments.value.map((file) => file.name),
       metadata: null,
+      jobId: null,
+      stages: initialStages(),
     }
 
     upsertWorkspace(nextWorkspace)
     activeId.value = workspaceId
 
     try {
-      const indexPromise = buildWorkspace(repositoryUrl.value.trim(), projectDocuments.value)
+      let buildJob = await startWorkspaceBuild(repositoryUrl.value.trim(), projectDocuments.value)
+      const persistedWorkspaceId = buildJob.workspaceId
+      replaceWorkspaceId(workspaceId, persistedWorkspaceId, buildJob.jobId)
+      workspaceId = persistedWorkspaceId
+      patchWorkspace(workspaceId, {
+        status: 'building',
+        jobId: buildJob.jobId,
+        stages: mapBuildStages(buildJob.stages),
+      })
 
-      await wait(200)
-      patchWorkspace(workspaceId, { status: 'indexing' })
-      await wait(600)
-      patchWorkspace(workspaceId, { status: 'graphing' })
-      await wait(700)
-      patchWorkspace(workspaceId, { status: 'analyzing' })
+      while (buildJob.status === 'queued' || buildJob.status === 'running') {
+        await wait(400)
+        buildJob = await getWorkspaceBuild(buildJob.jobId)
+        patchWorkspace(workspaceId, {
+          status: buildJob.status === 'failed' ? 'failed' : 'building',
+          stages: mapBuildStages(buildJob.stages),
+        })
+      }
 
-      const nextMetadata = await indexPromise
+      if (buildJob.status === 'failed') {
+        throw new Error(buildJob.error ?? 'Workspace build failed.')
+      }
+      if (!buildJob.metadata) {
+        throw new Error('Workspace build completed without repository metadata.')
+      }
+
+      const nextMetadata = buildJob.metadata
       patchWorkspace(workspaceId, {
         repoName: nextMetadata.repository,
         status: 'ready',
         metadata: nextMetadata,
+        stages: mapBuildStages(buildJob.stages),
       })
 
       repositoryUrl.value = ''
@@ -139,10 +186,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
       return nextMetadata
     } catch (caughtError) {
       error.value = extractMessage(caughtError, 'Failed to build workspace.')
-      workspaces.value = workspaces.value.filter((workspace) => workspace.id !== workspaceId)
-      if (activeId.value === workspaceId) {
-        activeId.value = workspaces.value[0]?.id ?? null
-      }
+      patchWorkspace(workspaceId, { status: 'failed' })
       return null
     } finally {
       busy.value = false
@@ -157,8 +201,60 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     projectDocuments.value = files
   }
 
-  function selectWorkspace(id: string) {
+  async function selectWorkspace(id: string) {
     activeId.value = id
+    const workspace = workspaces.value.find((item) => item.id === id)
+    if (!workspace || workspace.metadata || workspace.status !== 'ready') {
+      return
+    }
+
+    loadingList.value = true
+    error.value = null
+    try {
+      const persistedWorkspace = await getPersistedWorkspace(id)
+      patchWorkspace(id, {
+        repoName: persistedWorkspace.repoName,
+        repoUrl: persistedWorkspace.repoUrl,
+        status: 'ready',
+        metadata: persistedWorkspace.metadata,
+        stages: mapBuildStages(persistedWorkspace.stages),
+      })
+    } catch (caughtError) {
+      error.value = extractMessage(caughtError, 'Failed to load workspace.')
+    } finally {
+      loadingList.value = false
+    }
+  }
+
+  async function removeWorkspace(id: string) {
+    const workspace = workspaces.value.find((item) => item.id === id)
+    if (!workspace || removingIds.value.includes(id)) {
+      return
+    }
+    if (workspace.status === 'pending' || workspace.status === 'building') {
+      error.value = 'Wait for the workspace build to finish before removing it.'
+      return
+    }
+    if (!window.confirm(`Remove "${workspace.repoName}" from TestForge AI? This cannot be undone.`)) {
+      return
+    }
+
+    error.value = null
+    removedWorkspaceIds.add(id)
+    removingIds.value = [...removingIds.value, id]
+    try {
+      await deletePersistedWorkspace(id)
+      workspaces.value = workspaces.value.filter((item) => item.id !== id)
+      if (activeId.value === id) {
+        activeId.value = null
+      }
+    } catch (caughtError) {
+      removedWorkspaceIds.delete(id)
+      error.value = extractMessage(caughtError, 'Failed to remove workspace.')
+      window.alert(error.value)
+    } finally {
+      removingIds.value = removingIds.value.filter((workspaceId) => workspaceId !== id)
+    }
   }
 
   function startNewWorkspace() {
@@ -186,6 +282,16 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     upsertWorkspace({ ...existing, ...patch })
   }
 
+  function replaceWorkspaceId(oldId: string, newId: string, jobId: string) {
+    const workspace = workspaces.value.find((item) => item.id === oldId)
+    if (!workspace) {
+      return
+    }
+    upsertWorkspace({ ...workspace, id: newId, jobId })
+    workspaces.value = workspaces.value.filter((item) => item.id !== oldId)
+    activeId.value = newId
+  }
+
   return {
     repositoryUrl,
     projectDocuments,
@@ -196,14 +302,17 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     currentWorkspaceId,
     loadingList,
     busy,
+    removingIds,
     error,
     frameworkLabel,
     pipelineStages,
     targetOptions,
+    loadWorkspaces,
     createWorkspace,
     setRepositoryUrl,
     setProjectDocuments,
     selectWorkspace,
+    removeWorkspace,
     startNewWorkspace,
   }
 })
@@ -235,4 +344,49 @@ function capitalize(value: string) {
 
 function cleanVersion(value: string) {
   return value.replace(/^[~^]/, '')
+}
+
+function mapBuildStages(stages: WorkspaceBuildStage[]): WorkspaceStage[] {
+  const statusMap: Record<WorkspaceBuildStage['status'], WorkspaceStage['status']> = {
+    pending: 'upcoming',
+    running: 'active',
+    completed: 'done',
+    failed: 'failed',
+  }
+  return stages.map((stage) => ({
+    id: stage.id,
+    label: stage.label,
+    detail: stage.detail,
+    status: statusMap[stage.status],
+  }))
+}
+
+function initialStages(): WorkspaceStage[] {
+  return [
+    {
+      id: 'clone',
+      label: 'Repository clone',
+      detail: 'Waiting for the build worker',
+      status: 'upcoming',
+    },
+  ]
+}
+
+function mapPersistedWorkspace(workspace: PersistedWorkspaceSummary): WorkspaceListItem {
+  const statusMap: Record<PersistedWorkspaceSummary['status'], WorkspaceStatus> = {
+    queued: 'pending',
+    running: 'building',
+    ready: 'ready',
+    failed: 'failed',
+  }
+  return {
+    id: workspace.id,
+    repoName: workspace.repoName,
+    repoUrl: workspace.repoUrl,
+    status: statusMap[workspace.status],
+    docs: [],
+    metadata: null,
+    jobId: workspace.jobId,
+    stages: mapBuildStages(workspace.stages),
+  }
 }

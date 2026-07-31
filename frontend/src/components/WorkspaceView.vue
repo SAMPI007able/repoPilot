@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { AlertTriangle, FlaskConical, GitCompare, MessageSquareText } from '@lucide/vue'
+import { AlertTriangle, FlaskConical, GitCompare, MessageSquareText, Network } from '@lucide/vue'
 import { computed } from 'vue'
 import AskPanel from './AskPanel.vue'
 import BuildPipeline from './BuildPipeline.vue'
@@ -40,7 +40,7 @@ const repositoryMetadata = computed(() => props.metadata ?? safeMetadata.value)
 const linesCount = computed(() => createLinesCount(repositoryMetadata.value))
 const testCount = computed(() => repositoryMetadata.value.parsedFiles.reduce((sum, file) => sum + file.existing_tests, 0))
 const hotspots = computed(() =>
-  repositoryMetadata.value.parsedFiles.slice(0, 5).map((file) => ({
+  repositoryMetadata.value.parsedFiles.slice(0, 4).map((file) => ({
     path: file.path,
     score: `cc ${Math.max(file.imports * 7 + file.functions * 2, 18)}`,
   })),
@@ -64,9 +64,16 @@ const insightItems = [] as Array<{ title: string; path: string; severity: string
         <div class="workspace-view__subtitle">{{ workspace.repoUrl }}</div>
       </div>
 
-      <span class="status-pill" :class="workspace.status === 'ready' ? 'status-pill--ready' : 'status-pill--indexing'">
+      <span
+        class="status-pill"
+        :class="workspace.status === 'ready'
+          ? 'status-pill--ready'
+          : workspace.status === 'failed'
+            ? 'status-pill--failed'
+            : 'status-pill--indexing'"
+      >
         <span class="status-pill__dot" />
-        {{ workspace.status === 'ready' ? 'Workspace ready' : 'Building workspace' }}
+        {{ workspace.status === 'ready' ? 'Workspace ready' : workspace.status === 'failed' ? 'Build failed' : 'Building workspace' }}
       </span>
     </header>
 
@@ -96,9 +103,9 @@ const insightItems = [] as Array<{ title: string; path: string; severity: string
       />
     </section>
 
-    <section class="panel panel-pad">
-      <div class="panel-heading">
-        <h2>Dependency graph</h2>
+    <section class="panel panel-pad dependency-panel">
+      <div class="panel-heading dependency-panel__heading">
+        <h2><Network :size="17" />Dependency graph</h2>
         <span class="panel-heading__meta">{{ graph.nodes.length }} nodes · {{ graph.edges.length }} edges</span>
       </div>
       <DependencyGraph v-if="graph.nodes.length" :nodes="graph.nodes" :edges="graph.edges" />
@@ -212,11 +219,20 @@ function createGraphData(metadata: RepositoryMetadata): { nodes: GraphNodeView[]
   }))
 
   const selectedPathSet = new Set(selectedPaths)
+  const uniqueConnections = new Set<string>()
   const edges = metadata.relationships
     .filter((relationship) => selectedPathSet.has(relationship.source) && selectedPathSet.has(relationship.target))
+    .filter((relationship) => {
+      const connectionId = [relationship.source, relationship.target].sort().join('<->')
+      if (uniqueConnections.has(connectionId)) {
+        return false
+      }
+      uniqueConnections.add(connectionId)
+      return true
+    })
     .slice(0, 18)
-    .map((relationship) => ({
-      id: `${relationship.source}->${relationship.target}`,
+    .map((relationship, index) => ({
+      id: `${relationship.source}->${relationship.target}:${index}`,
       source: relationship.source,
       target: relationship.target,
       strength: (((degreeByPath.get(relationship.source) ?? 0) + (degreeByPath.get(relationship.target) ?? 0)) >= 5
@@ -232,12 +248,8 @@ function shortenLabel(path: string) {
 }
 
 function buildShortLabel(path: string) {
-  const segments = shortenLabel(path).replace(/[^A-Za-z0-9]+/g, ' ').trim().split(/\s+/)
-  const fromCaps = shortenLabel(path).replace(/[^A-Za-z]/g, '').match(/[A-Z]/g)?.slice(0, 2).join('')
-  if (fromCaps) {
-    return fromCaps.slice(0, 2)
-  }
-  return segments.map((segment) => segment[0]?.toLowerCase() ?? '').join('').slice(0, 2) || 'na'
+  const normalized = shortenLabel(path).replace(/[^A-Za-z0-9]/g, '')
+  return normalized.slice(0, 2) || 'na'
 }
 
 function inferKind(path: string) {

@@ -95,10 +95,6 @@ export const useGenerationStore = defineStore('generation', () => {
       error.value = 'Build a workspace before generating tests.'
       return null
     }
-    // if (!target.value) {
-    //   error.value = 'Select a target module first.'
-    //   return null
-    // }
     if (!nextScenario) {
       error.value = 'Describe a scenario first.'
       return null
@@ -112,7 +108,8 @@ export const useGenerationStore = defineStore('generation', () => {
     try {
       const response = await generateTests({
         workspaceId,
-        target: target.value,
+        mode: 'scenario',
+        scenario: nextScenario,
         type: testType.value,
       })
       result.value = response
@@ -126,14 +123,40 @@ export const useGenerationStore = defineStore('generation', () => {
   }
 
   async function runGenerationFromFile(file?: string) {
+    const workspaceId = workspaceStore.currentWorkspaceId
     const nextFile = (file ?? selectedFile.value).trim()
-    const matchingTarget = workspaceStore.targetOptions.find((option) => option.path === nextFile)
-    if (matchingTarget) {
-      target.value = matchingTarget.value
+    if (!workspaceId) {
+      error.value = 'Build a workspace before generating tests.'
+      return null
     }
+    if (!nextFile) {
+      error.value = 'Select a file first.'
+      return null
+    }
+
+    const matchingTarget = workspaceStore.targetOptions.find((option) => option.path === nextFile)
+    target.value = matchingTarget?.value ?? nextFile
     selectedFile.value = nextFile
     fileMenuOpen.value = false
-    return runGenerationFromScenario(nextFile)
+    busy.value = true
+    error.value = null
+    result.value = null
+
+    try {
+      const response = await generateTests({
+        workspaceId,
+        mode: 'file',
+        target: target.value,
+        type: testType.value,
+      })
+      result.value = response
+      return response
+    } catch (caughtError) {
+      error.value = extractMessage(caughtError, 'Failed to generate tests.')
+      return null
+    } finally {
+      busy.value = false
+    }
   }
 
   async function runImpactAnalysis(file?: string) {

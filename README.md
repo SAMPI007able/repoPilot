@@ -1,88 +1,93 @@
 # TestForge AI
 
-TestForge AI is a developer-focused assistant for generating tests, exploring repositories, and running AI-powered analysis against indexed codebases. It provides a FastAPI backend that integrates AI capabilities and a Vite + Vue frontend for interacting with repositories and results.
+TestForge AI is a developer-focused assistant for generating tests, exploring repositories, and running AI-powered analysis against indexed codebases. It provides a FastAPI backend and a Vite + Vue frontend.
 
 Key features
-- Index GitHub repositories into a local workspace for analysis
-- Generate tests (unit/integration) for target files or classes
-- Free-form chat-style queries against an indexed repository
-- Impact analysis for code targets
+
+- Index GitHub repositories into durable, restorable workspaces
+- Run multiple builds and parser batches concurrently
+- Generate unit and integration tests
+- Ask free-form questions against an indexed repository
+- Explore repository dependencies and impact analysis
 
 Repository layout
-- backend/: Python FastAPI backend and services
-- frontend/: Vite + Vue frontend app
-- workspace/repositories/: local clones of indexed repos
+
+- `backend/`: FastAPI backend, indexing services, and persistence
+- `backend/workspace/checkouts/`: temporary clones removed after indexing
+- `backend/workspace/artifacts/`: compressed repository-index artifacts in local development
+- `frontend/`: Vite + Vue frontend
 
 Getting started
-Prerequisites
-- Python 3.10+ (recommended)
-- Node.js 16+ and npm or pnpm
+
+Prerequisites:
+
+- Python 3.10+
+- Node.js 16+
 - Git
 
-Backend (Python)
-1. Create and activate a virtual environment:
+Backend
 
-```
+Create a virtual environment, install dependencies, and run the API from the repository root:
+
+```powershell
 python -m venv .venv
-source .venv/bin/activate    # macOS / Linux
-.venv\\Scripts\\Activate.ps1  # Windows PowerShell
-```
-
-2. Install Python dependencies:
-
-```
+.venv\Scripts\Activate.ps1
 pip install -r backend/requirements.txt
-```
-
-3. Run the backend (development):
-
-```
+$env:PYTHONPATH="backend"
 uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 ```
 
-The backend serves a small API. Key endpoints exposed by the backend (see [backend/app/main.py](backend/app/main.py#L1-L400)):
-- `GET /health` — simple health check
-- `POST /workspaces/index` — index a GitHub repo (multipart form or JSON payload)
-- `POST /ai/query` — unified AI query for `type=chat` or `type=test_generation`
-- `POST /workspaces/impact-analysis` — run impact analysis for a target
+Key endpoints:
 
-Notes
-- The backend stores indexed repositories under `workspace/repositories/`.
-- AI provider credentials and configuration (if required) should be set as environment variables according to the chosen provider implementation in `backend/app/services/ai/`.
+- `GET /health` — health check
+- `POST /workspaces/index` — start an asynchronous repository build
+- `GET /workspaces/index/{job_id}` — inspect build and parallel stage progress
+- `GET /workspaces` — list persisted workspaces for the sidebar
+- `GET /workspaces/{workspace_id}` — restore a persisted repository index
+- `DELETE /workspaces/{workspace_id}` — remove workspace metadata and artifacts
+- `POST /ai/query` — chat or test generation
+- `POST /workspaces/impact-analysis` — analyze a target's impact
+
+Persistence
+
+A checkout exists only while a build is running. After the compressed repository-index artifact is uploaded and checksum-verified, the temporary checkout is removed.
+
+Local development uses SQLite and local compressed artifacts by default. For cloud deployment, set `DATABASE_URL` to PostgreSQL and configure S3-compatible object storage using [backend/.env.example](backend/.env.example). `WORKSPACE_BUILD_JOBS` controls concurrent repository builds, while `WORKSPACE_PARSE_WORKERS` controls parser batches within each build.
+
+Legacy checkout migration
+
+Existing clones under `backend/workspace/repositories` can be persisted without deleting them:
+
+```powershell
+$env:PYTHONPATH="backend"
+python -m app.scripts.migrate_workspaces
+```
+
+After validating the restored workspaces in the UI, explicitly request cleanup:
+
+```powershell
+python -m app.scripts.migrate_workspaces --delete-after-persist
+```
+
+Each clone is deleted only after its artifact has been uploaded, downloaded, checksum-verified, and committed to the database.
 
 Frontend
-1. Install dependencies and run the dev server:
 
-```
+```powershell
 cd frontend
 npm install
 npm run dev
 ```
 
-2. The frontend expects the backend to be running at `http://localhost:8000` (CORS allows `http://localhost:5173`). Adjust the API base URL in `frontend/src/services/api.ts` if needed.
+The frontend expects the backend at `http://localhost:8000`. The sidebar refreshes persisted workspace status every two seconds and restores ready workspaces on selection.
 
 Testing
-- Backend tests: from the repo root run:
 
+From the repository root:
+
+```powershell
+$env:PYTHONPATH="backend"
+python -m unittest discover -s backend/tests -v
+cd frontend
+npm run build
 ```
-pip install -r backend/requirements.txt
-pytest -q
-```
-
-- Frontend tests (if present) can be run via your chosen test runner configured in `frontend/package.json`.
-
-Development notes
-- To index a repository, POST to `/workspaces/index` with a `githubUrl` form field or JSON payload. Uploaded project documents may be included via `project_docs` multipart files.
-- Use the `/ai/query` endpoint with `type=chat` to ask questions against an indexed workspace, or `type=test_generation` to generate tests for a target.
-- Inspect `backend/app/main.py` for the full route definitions and request/response models.
-
-Contributing
-- Feel free to open issues or PRs for bugs, feature requests, or improvements.
-- Run linters and tests before submitting changes.
-
-License
-- This repository does not include a license file. Add a `LICENSE` if you want to clarify reuse terms.
-
-Contact
-- For questions or help, open an issue in this repository.
-

@@ -56,6 +56,21 @@ class RepositoryService:
             print(f"Failed to clone repository: {e}")
             raise e
 
+    def get_commit_sha(self, repository_path: str) -> str | None:
+        try:
+            import git
+
+            return git.Repo(repository_path).head.commit.hexsha
+        except Exception:
+            return None
+
+    def delete_repository(self, repository_path: str) -> None:
+        if not os.path.exists(repository_path):
+            return
+        shutil.rmtree(repository_path, onerror=self._handle_remove_readonly)
+        if os.path.exists(repository_path):
+            raise RuntimeError(f"Failed to remove temporary repository: {repository_path}")
+
     def is_supported_file(self, file_name: str) -> bool:
         return os.path.splitext(file_name)[1].lower() in self.SUPPORTED_EXTENSIONS
 

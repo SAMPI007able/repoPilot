@@ -1,42 +1,75 @@
 <script setup lang="ts">
+import { onMounted, ref, watch } from 'vue'
 import type { WorkspaceListItem } from '../stores/workspace'
-import { GitBranch } from '@lucide/vue'
+import { ChevronLeft, ChevronRight, GitBranch, LoaderCircle, Trash2 } from '@lucide/vue'
+
+const SIDEBAR_STORAGE_KEY = 'testforge.sidebar.collapsed'
+
 defineProps<{
   workspaces: WorkspaceListItem[]
   activeId: string | null
   loading: boolean
+  removingIds: string[]
 }>()
 
 const emit = defineEmits<{
   (e: 'select', id: string): void
+  (e: 'remove', id: string): void
   (e: 'new'): void
 }>()
 
+const collapsed = ref(false)
+
+onMounted(() => {
+  collapsed.value = window.localStorage.getItem(SIDEBAR_STORAGE_KEY) === 'true'
+})
+
+watch(collapsed, (value) => {
+  window.localStorage.setItem(SIDEBAR_STORAGE_KEY, String(value))
+})
+
 const statusMap = {
   pending: { label: 'Pending', className: 'status-pill status-pill--pending' },
-  indexing: { label: 'Indexing', className: 'status-pill status-pill--indexing' },
-  graphing: { label: 'Graphing', className: 'status-pill status-pill--graphing' },
-  analyzing: { label: 'Analyzing', className: 'status-pill status-pill--analyzing' },
+  building: { label: 'Building', className: 'status-pill status-pill--indexing' },
   ready: { label: 'Ready', className: 'status-pill status-pill--ready' },
+  failed: { label: 'Failed', className: 'status-pill status-pill--failed' },
 }
 </script>
 
 <template>
-  <aside class="sidebar">
+  <aside class="sidebar" :class="{ 'sidebar--collapsed': collapsed }">
+    <button
+      class="sidebar__toggle"
+      type="button"
+      :aria-label="collapsed ? 'Expand sidebar' : 'Collapse sidebar'"
+      :aria-expanded="!collapsed"
+      :title="collapsed ? 'Expand sidebar' : 'Collapse sidebar'"
+      @click="collapsed = !collapsed"
+    >
+      <ChevronRight v-if="collapsed" aria-hidden="true" />
+      <ChevronLeft v-else aria-hidden="true" />
+    </button>
+
     <div class="brand-block">
       <div class="brand-block__icon">
         <span class="glyph glyph--brand">TF</span>
       </div>
-      <div>
+      <div class="brand-block__copy">
         <div class="brand-block__title">TestForge AI</div>
         <div class="brand-block__subtitle">Understand. Answer. Test.</div>
       </div>
     </div>
 
     <div class="sidebar__actions">
-      <button class="btn btn-ghost btn-full" type="button" @click="emit('new')">
+      <button
+        class="btn btn-ghost btn-full"
+        type="button"
+        aria-label="New workspace"
+        title="New workspace"
+        @click="emit('new')"
+      >
         <span class="glyph glyph--button">+</span>
-        <span>New workspace</span>
+        <span class="sidebar__action-label">New workspace</span>
       </button>
     </div>
 
@@ -47,21 +80,45 @@ const statusMap = {
     <div class="sidebar__list scrollbar-thin">
       <div v-if="loading" class="sidebar__empty">Loading...</div>
       <div v-else-if="workspaces.length === 0" class="sidebar__empty">No workspaces yet.</div>
-      <button
+      <div
         v-for="workspace in workspaces"
         :key="workspace.id"
-        class="workspace-row"
-        :class="{ 'workspace-row--active': workspace.id === activeId }"
-        type="button"
-        @click="emit('select', workspace.id)"
+        class="workspace-row-shell"
       >
-        <div class="workspace-row__title"><GitBranch class="h-3.5 w-3.5 shrink-0 text-slate-500" />{{ workspace.repoName }}</div>
-        <div class="workspace-row__url">{{ workspace.repoUrl }}</div>
-        <span :class="statusMap[workspace.status].className">
-          <span class="status-pill__dot" />
-          {{ statusMap[workspace.status].label }}
-        </span>
-      </button>
+        <button
+          class="workspace-row"
+          :class="{ 'workspace-row--active': workspace.id === activeId }"
+          type="button"
+          :title="collapsed ? `${workspace.repoName} · ${statusMap[workspace.status].label}` : undefined"
+          :aria-label="collapsed ? `${workspace.repoName}, ${statusMap[workspace.status].label}` : undefined"
+          @click="emit('select', workspace.id)"
+        >
+          <div class="workspace-row__title">
+            <GitBranch class="workspace-row__icon h-3.5 w-3.5 shrink-0 text-slate-500" />
+            <span class="workspace-row__name">{{ workspace.repoName }}</span>
+          </div>
+          <div class="workspace-row__url">{{ workspace.repoUrl }}</div>
+          <span :class="statusMap[workspace.status].className">
+            <span class="status-pill__dot" />
+            <span class="status-pill__label">{{ statusMap[workspace.status].label }}</span>
+          </span>
+        </button>
+        <button
+          class="workspace-row__remove"
+          type="button"
+          :disabled="workspace.status === 'pending' || workspace.status === 'building' || removingIds.includes(workspace.id)"
+          :aria-label="`Remove ${workspace.repoName}`"
+          :title="workspace.status === 'pending' || workspace.status === 'building' ? 'Available after the build finishes' : `Remove ${workspace.repoName}`"
+          @click="emit('remove', workspace.id)"
+        >
+          <LoaderCircle
+            v-if="removingIds.includes(workspace.id)"
+            class="workspace-row__remove-spinner"
+            aria-hidden="true"
+          />
+          <Trash2 v-else aria-hidden="true" />
+        </button>
+      </div>
     </div>
   </aside>
 </template>

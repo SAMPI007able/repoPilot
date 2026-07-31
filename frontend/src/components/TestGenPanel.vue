@@ -30,7 +30,7 @@ const emit = defineEmits<{
   <div class="panel panel-pad">
     <div class="panel-heading">
       <h2>Generate integration tests</h2>
-      <span class="panel-heading__meta">{{ mode === 'scenario' ? 'Scenario -> test' : 'File -> all scenarios' }}</span>
+      <span class="panel-heading__meta">{{ mode === 'scenario' ? 'Requirement -> cross-module tests' : 'File -> all scenarios' }}</span>
     </div>
 
     <div class="mode-switch">
@@ -53,16 +53,23 @@ const emit = defineEmits<{
     </div>
 
     <div v-if="mode === 'scenario'">
-      <div class="inline-form">
-        <input
-          class="input"
+      <label class="scenario-field">
+        <span class="scenario-field__label">Requirement or end-to-end behavior</span>
+        <textarea
+          class="input scenario-field__input"
           :value="scenario"
-          placeholder="Describe a scenario, e.g. 'A customer retries payment after a timeout'"
-          @input="emit('update:scenario', ($event.target as HTMLInputElement).value)"
-          @keydown.enter.prevent="emit('generate:scenario')"
-        >
+          placeholder="Describe the behavior to verify, e.g. a customer retries a payment after a timeout and receives exactly one successful charge."
+          @input="emit('update:scenario', ($event.target as HTMLTextAreaElement).value)"
+          @keydown.ctrl.enter.prevent="emit('generate:scenario')"
+          @keydown.meta.enter.prevent="emit('generate:scenario')"
+        />
+      </label>
+      <div class="scenario-actions">
+        <p class="helper-text">
+          No file selection is needed. TestForge discovers the related modules and follows their dependency boundaries.
+        </p>
         <button class="btn btn-primary" type="button" :disabled="busy || !scenario.trim()" @click="emit('generate:scenario')">
-          Generate
+          Generate from requirement
         </button>
       </div>
 

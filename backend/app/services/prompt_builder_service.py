@@ -72,6 +72,62 @@ class PromptBuilderService:
             ]
         )
 
+    def build_scenario_prompt(self, context: GenerationContext) -> str:
+        framework_name = context.test_framework or "the project's existing test framework"
+        relevant_modules = "\n\n".join(
+            "\n".join(
+                [
+                    f"Module: {dependency.path or dependency.name}",
+                    f"Selection reason: {dependency.reason}",
+                    "Source:",
+                    dependency.source,
+                ]
+            )
+            for dependency in context.dependencies
+        ) or "No source modules matched confidently. Infer boundaries from documentation and package intelligence."
+        existing_test_lines = [f"- {path}" for path in context.existing_tests] or ["- None"]
+
+        return "\n".join(
+            [
+                "You are a senior QA engineer designing repository-grounded integration tests.",
+                "Generate a Markdown response only. Do not return JSON.",
+                "The request is scenario-scoped, not file-scoped.",
+                "Trace the end-to-end behavior across every relevant module and boundary.",
+                "Use only modules and APIs supported by the repository context; state assumptions where evidence is incomplete.",
+                "Prefer observable behavior over testing implementation details.",
+                "",
+                "Requirement / End-to-End Scenario",
+                context.scenario or "Not provided",
+                "",
+                f"Test Type: {context.test_type}",
+                f"Test Framework: {framework_name}",
+                "",
+                "Package Intelligence:",
+                self._build_package_summary(context),
+                "",
+                "Documentation:",
+                self._build_documentation_summary(context),
+                "",
+                "Existing Tests:",
+                *existing_test_lines,
+                "",
+                "Relevant Repository Modules:",
+                relevant_modules,
+                "",
+                "Generate integration tests that exercise the complete scenario across the identified modules.",
+                "Include required setup, mocks/fakes only at true external boundaries, assertions, and cleanup.",
+                "",
+                "Use exactly this Markdown structure:",
+                "# Integration Test Plan",
+                "## Scenario Interpretation",
+                "## Modules and Boundaries",
+                "## Happy Path",
+                "## Edge Cases",
+                "## Failure and Recovery Scenarios",
+                "## Example Integration Test Code",
+            ]
+        )
+
     def _build_package_summary(self, context: GenerationContext) -> str:
         if context.package_info is None:
             return "No package.json intelligence available."

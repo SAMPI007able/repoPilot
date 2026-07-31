@@ -1,5 +1,7 @@
 import json
 import os
+from concurrent.futures import Future, ThreadPoolExecutor
+from collections.abc import Callable
 from app.models.code_models import (
     DocumentationAsset,
     PackageIntelligence,
@@ -59,6 +61,115 @@ class RepositoryIndexerService:
             parsed_file_details=parsed_files,
             relationships=relationships,
         )
+
+    def index_repository_parallel(
+        self,
+        repository_name: str,
+        repo_path: str,
+        uploaded_docs: list[DocumentationAsset] | None = None,
+        progress: Callable[[str, str, str | None], None] | None = None,
+        parse_workers: int = 3,
+    ) -> RepositoryMetadata:
+        """Index independent repository concerns concurrently and report real stage progress."""
+        report = progress or (lambda _stage, _status, _detail=None: None)
+        worker_count = max(1, parse_workers)
+
+        def run_stage(stage_id: str, operation):
+            report(stage_id, "running", None)
+            try:
+                result = operation()
+            except Exception:
+                report(stage_id, "failed", None)
+                raise
+            report(stage_id, "completed", None)
+            return result
+
+        with ThreadPoolExecutor(max_workers=worker_count + 3) as executor:
+            scan_future = executor.submit(
+                run_stage,
+                "scan",
+                lambda: self.repository_service.scan_repository(repo_path),
+            )
+            documentation_future = executor.submit(
+                run_stage,
+                "documentation",
+                lambda: self._load_documentation(repo_path),
+            )
+            package_future = executor.submit(
+                run_stage,
+                "package",
+                lambda: self._load_package_intelligence(repo_path),
+            )
+
+            scan_result = scan_future.result()
+            indexed_files = scan_result["files"]
+            active_parse_workers = min(worker_count, len(indexed_files))
+            parse_futures: list[tuple[list[int], Future[list[ParsedFile]]]] = []
+
+            if active_parse_workers:
+                indexed_positions = list(range(len(indexed_files)))
+                chunks = [
+                    indexed_positions[worker_index::active_parse_workers]
+                    for worker_index in range(active_parse_workers)
+                ]
+                for worker_index, positions in enumerate(chunks, start=1):
+                    stage_id = f"parse_{worker_index}"
+                    parse_futures.append(
+                        (
+                            positions,
+                            executor.submit(
+                                run_stage,
+                                stage_id,
+                                lambda positions=positions: self.parser_service.parse_many(
+                                    (
+                                        indexed_files[position]["absolute_path"],
+                                        indexed_files[position]["path"],
+                                    )
+                                    for position in positions
+                                ),
+                            ),
+                        )
+                    )
+
+            for worker_index in range(active_parse_workers + 1, worker_count + 1):
+                report(f"parse_{worker_index}", "completed", "No additional parser batch required")
+
+            parsed_by_position: dict[int, ParsedFile] = {}
+            for positions, parse_future in parse_futures:
+                parsed_chunk = parse_future.result()
+                parsed_by_position.update(zip(positions, parsed_chunk))
+            parsed_files = [parsed_by_position[position] for position in range(len(indexed_files))]
+
+            documentation = documentation_future.result()
+            package_info = package_future.result()
+
+        self._attach_existing_tests(parsed_files)
+        report("relationships", "running", None)
+        try:
+            relationships = self.graph_service.build_relationships(parsed_files)
+        except Exception:
+            report("relationships", "failed", None)
+            raise
+        report("relationships", "completed", None)
+
+        if uploaded_docs:
+            uploaded_paths = {asset.path for asset in uploaded_docs}
+            documentation = [asset for asset in documentation if asset.path not in uploaded_paths]
+            documentation.extend(uploaded_docs)
+
+        report("finalize", "running", None)
+        metadata = RepositoryMetadata(
+            repository=repository_name,
+            statistics=RepositoryStatistics(**scan_result["stats"]),
+            testFramework=package_info.testFramework if package_info else None,
+            packageInfo=package_info,
+            documentation=documentation,
+            parsedFiles=[self._summarize_file(parsed_file) for parsed_file in parsed_files],
+            parsed_file_details=parsed_files,
+            relationships=relationships,
+        )
+        report("finalize", "completed", None)
+        return metadata
 
     def _summarize_file(self, parsed_file: ParsedFile) -> ParsedFileSummary:
         return ParsedFileSummary(

@@ -1,3 +1,6 @@
+from datetime import datetime
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 
@@ -51,6 +54,41 @@ class RepositoryMetadata(BaseModel):
     relationships: list["GraphRelationship"] = Field(default_factory=list)
 
 
+class WorkspaceBuildStage(BaseModel):
+    id: str
+    label: str
+    detail: str
+    status: Literal["pending", "running", "completed", "failed"] = "pending"
+
+
+class WorkspaceBuildJob(BaseModel):
+    jobId: str
+    workspaceId: str
+    status: Literal["queued", "running", "completed", "failed"] = "queued"
+    stages: list[WorkspaceBuildStage] = Field(default_factory=list)
+    metadata: RepositoryMetadata | None = None
+    error: str | None = None
+
+
+class WorkspaceSummary(BaseModel):
+    id: str
+    jobId: str | None = None
+    repoUrl: str
+    repoName: str
+    status: str
+    statistics: RepositoryStatistics = Field(
+        default_factory=lambda: RepositoryStatistics(files=0, typescript=0, javascript=0)
+    )
+    stages: list[WorkspaceBuildStage] = Field(default_factory=list)
+    error: str | None = None
+    createdAt: datetime
+    updatedAt: datetime
+
+
+class WorkspaceDetail(WorkspaceSummary):
+    metadata: RepositoryMetadata
+
+
 class GraphRelationship(BaseModel):
     source: str
     target: str
@@ -62,6 +100,7 @@ class GenerationContext(BaseModel):
     target: str
     test_type: str
     target_source: str
+    scenario: str | None = None
     classes: list[CodeClass] = Field(default_factory=list)
     imports: list[ImportReference] = Field(default_factory=list)
     methods: list[CodeMethod] = Field(default_factory=list)
