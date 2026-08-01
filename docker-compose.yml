@@ -24,6 +24,14 @@ services:
     volumes:
       - redis-data:/data
 
+  artifact-init:
+    image: alpine:3.21
+    user: root
+    command: ["sh", "-c", "chown -R 10001:10001 /artifacts && chmod -R g+rwX /artifacts && chmod 2770 /artifacts"]
+    volumes:
+      - preview-artifacts:/artifacts
+    restart: "no"
+
   api:
     build: ./backend
     environment: &backend-environment
@@ -36,6 +44,8 @@ services:
       PREVIEW_PUBLIC_HOST: 127.0.0.1
       PREVIEW_HEALTH_HOST: host.docker.internal
     depends_on:
+      artifact-init:
+        condition: service_completed_successfully
       postgres:
         condition: service_healthy
       redis:
@@ -52,9 +62,11 @@ services:
 
   preview-worker:
     build: ./backend
-    command: ["rq", "worker", "previews", "--url", "redis://redis:6379/0"]
+    command: ["sh", "-c", "umask 0002 && exec rq worker previews --url redis://redis:6379/0"]
     environment: *backend-environment
     user: root
+    group_add:
+      - "10001"
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:

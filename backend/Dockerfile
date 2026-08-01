@@ -20,7 +20,7 @@ COPY parser /app/parser
 COPY --from=parser-runtime /app/parser/node_modules /app/parser/node_modules
 RUN node --experimental-strip-types /app/parser/parse.ts /app/parser/parse.ts > /dev/null
 
-RUN addgroup --system testforge && adduser --system --ingroup testforge testforge \
+RUN groupadd --gid 10001 testforge && useradd --uid 10001 --gid testforge --system --create-home testforge \
     && mkdir -p /app/workspace && chown -R testforge:testforge /app
 USER testforge
 
