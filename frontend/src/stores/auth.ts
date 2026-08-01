@@ -11,6 +11,7 @@ import type { CurrentUser } from '../types/api'
 const mode = import.meta.env.VITE_AUTH_MODE || 'oidc'
 const developmentToken = import.meta.env.VITE_AUTH_DEVELOPMENT_TOKEN || ''
 const developmentSignedOutKey = 'testforge.developmentSignedOut'
+export type SignInMethod = 'github' | 'google' | 'email'
 let manager: UserManager | null = null
 
 function oidcManager() {
@@ -40,14 +41,9 @@ export const useAuthStore = defineStore('auth', () => {
     mode !== 'development' || window.sessionStorage.getItem(developmentSignedOutKey) !== 'true',
   )
   const authenticated = computed(() => user.value !== null)
+  const redirectSignIn = mode !== 'development'
   let oidcEventsBound = false
   let handlingAuthenticationFailure = false
-
-  function navigateToSignIn() {
-    if (!['/sign-in', '/auth/callback'].includes(window.location.pathname)) {
-      window.location.assign('/sign-in')
-    }
-  }
 
   async function handleAuthenticationFailure() {
     if (handlingAuthenticationFailure) return
@@ -61,7 +57,6 @@ export const useAuthStore = defineStore('auth', () => {
       } else if (manager) {
         await manager.removeUser().catch(() => undefined)
       }
-      navigateToSignIn()
     } finally {
       handlingAuthenticationFailure = false
     }
@@ -106,7 +101,7 @@ export const useAuthStore = defineStore('auth', () => {
     }
   }
 
-  async function signIn() {
+  async function signIn(method: SignInMethod = 'email') {
     error.value = null
     if (mode === 'development') {
       loading.value = true
@@ -120,7 +115,16 @@ export const useAuthStore = defineStore('auth', () => {
       }
       return
     }
-    await oidcManager().signinRedirect()
+    const connectionByMethod: Record<SignInMethod, string> = {
+      github: import.meta.env.VITE_OIDC_GITHUB_CONNECTION || '',
+      google: import.meta.env.VITE_OIDC_GOOGLE_CONNECTION || '',
+      email: import.meta.env.VITE_OIDC_EMAIL_CONNECTION || '',
+    }
+    const connection = connectionByMethod[method]
+    const parameter = import.meta.env.VITE_OIDC_CONNECTION_PARAMETER || 'connection'
+    await oidcManager().signinRedirect(
+      connection ? { extraQueryParams: { [parameter]: connection } } : undefined,
+    )
   }
 
   async function completeSignIn() {
@@ -153,5 +157,17 @@ export const useAuthStore = defineStore('auth', () => {
     await oidc.signoutRedirect()
   }
 
-  return { user, initialized, loading, error, authenticated, initialize, signIn, completeSignIn, signOut, accessToken }
+  return {
+    user,
+    initialized,
+    loading,
+    error,
+    authenticated,
+    redirectSignIn,
+    initialize,
+    signIn,
+    completeSignIn,
+    signOut,
+    accessToken,
+  }
 })

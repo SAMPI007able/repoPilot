@@ -9,12 +9,14 @@ import {
   Network,
   ShieldCheck,
 } from '@lucide/vue'
+import RepositoryConnections from './RepositoryConnections.vue'
 
 defineProps<{
   repoUrl: string
   docs: File[]
   busy: boolean
   error: string | null
+  authenticated: boolean
 }>()
 
 const emit = defineEmits<{
@@ -108,8 +110,9 @@ const cards = [
         <p v-if="error" class="error-text">{{ error }}</p>
       </div>
 
-      <p class="landing__footnote">
-        Future: connect GitHub, GitLab, or Bitbucket to analyze your own private repositories.
+      <RepositoryConnections v-if="authenticated" />
+      <p v-else class="landing__footnote">
+        Sign in when you are ready to build, or connect a source-control provider to browse private repositories.
       </p>
     </section>
 

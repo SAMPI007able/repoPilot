@@ -10,7 +10,7 @@ const router = createRouter({
       path: '/',
       name: 'home',
       component: Home,
-      meta: { requiresAuth: true },
+      meta: { public: true },
     },
     { path: '/sign-in', name: 'sign-in', component: SignIn, meta: { public: true } },
     { path: '/auth/callback', name: 'auth-callback', component: AuthCallback, meta: { public: true } },
