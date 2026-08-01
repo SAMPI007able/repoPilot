@@ -72,7 +72,7 @@ services:
       redis:
         condition: service_healthy
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
     volumes:
       - preview-artifacts:/app/workspace/artifacts
     healthcheck:
@@ -118,7 +118,7 @@ services:
       api:
         condition: service_healthy
     ports:
-      - "5173:80"
+      - "127.0.0.1:5173:80"
 
 volumes:
   postgres-data:
