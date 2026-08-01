@@ -37,6 +37,8 @@ class SandboxProvider(Protocol):
 class LocalDockerSandboxProvider:
     """Trusted-development adapter. It is deliberately not a production isolation boundary."""
 
+    CACHE_ROOT = "/workspace/repo/.testforge-cache"
+
     def __init__(self) -> None:
         self.git_image = os.getenv("PREVIEW_GIT_IMAGE", "alpine/git:v2.47.2")
         self.node_image_prefix = os.getenv("PREVIEW_NODE_IMAGE_PREFIX", "node")
@@ -95,6 +97,10 @@ class LocalDockerSandboxProvider:
             transition(PreviewStatus.BUILDING, "Building the web application in the sandbox.", state)
             self._run_step(
                 client, node_image, shlex.split(preview.manifest.build.command),
+                volume, build_network.name, labels, log, user="node",
+            )
+            self._run_step(
+                client, node_image, ["rm", "-rf", "--", self.CACHE_ROOT],
                 volume, build_network.name, labels, log, user="node",
             )
 
@@ -178,20 +184,38 @@ class LocalDockerSandboxProvider:
             "cap_drop": ["ALL"] if drop_caps else [],
             "security_opt": ["no-new-privileges:true"],
         }
+        cache_environment = {
+            "HOME": f"{self.CACHE_ROOT}/home",
+            "npm_config_cache": f"{self.CACHE_ROOT}/npm",
+            "YARN_CACHE_FOLDER": f"{self.CACHE_ROOT}/yarn",
+            "YARN_GLOBAL_FOLDER": f"{self.CACHE_ROOT}/yarn-global",
+            "XDG_CACHE_HOME": f"{self.CACHE_ROOT}/xdg",
+            "COREPACK_HOME": f"{self.CACHE_ROOT}/corepack",
+        }
         container = client.containers.run(
             image, command, detach=True, working_dir=working_dir,
             volumes={volume.name: {"bind": "/workspace", "mode": "rw"}},
             network=network_name, read_only=True,
             tmpfs={"/tmp": "rw,noexec,nosuid,size=128m"},
-            environment={"npm_config_cache": "/tmp/npm-cache"}, user=user,
+            environment=cache_environment, user=user,
             mem_limit="2g", nano_cpus=2_000_000_000, pids_limit=256, labels=labels,
             **security,
         )
-        result = container.wait(timeout=900)
-        output = self._decode(container.logs(stdout=True, stderr=True))
-        log(output)
-        container.remove(force=True)
+        try:
+            result = container.wait(timeout=900)
+            output = self._decode(container.logs(stdout=True, stderr=True))
+            log(output)
+        finally:
+            try:
+                container.remove(force=True)
+            except Exception:
+                pass
         if result.get("StatusCode") != 0:
+            if "ENOSPC" in output or "no space left on device" in output.lower():
+                raise SandboxExecutionError(
+                    "SANDBOX_STORAGE_EXHAUSTED",
+                    "The sandbox ran out of storage while installing or building dependencies.",
+                )
             raise SandboxExecutionError("SANDBOX_COMMAND_FAILED", "A sandbox build command failed. See preview logs.")
 
     @staticmethod
