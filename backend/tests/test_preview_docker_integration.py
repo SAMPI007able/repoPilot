@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 
 from app.models.preview_models import PreviewEnvironment
 from app.services.sandbox_provider import LocalDockerSandboxProvider
-from tests.test_runtime_manifest import valid_manifest
+from backend.tests.test_runtime_manifest import valid_manifest
 
 
 @unittest.skipUnless(

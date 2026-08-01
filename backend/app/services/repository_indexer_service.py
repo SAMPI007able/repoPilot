@@ -79,8 +79,8 @@ class RepositoryIndexerService:
             report(stage_id, "running", None)
             try:
                 result = operation()
-            except Exception:
-                report(stage_id, "failed", None)
+            except Exception as exc:
+                report(stage_id, "failed", str(exc))
                 raise
             report(stage_id, "completed", None)
             return result

@@ -114,6 +114,34 @@ class RepositoryIndexerServiceTests(unittest.TestCase):
             self.assertIn((f"parse_{worker_index}", "running"), progress_events)
             self.assertIn((f"parse_{worker_index}", "completed"), progress_events)
 
+    def test_parallel_stage_exposes_parser_failure_detail(self) -> None:
+        repository_service = Mock(spec=RepositoryService)
+        repository_service.scan_repository.return_value = {
+            "files": [{"absolute_path": os.path.abspath("broken.ts"), "path": "broken.ts"}],
+            "stats": {"files": 1, "typescript": 1, "javascript": 0},
+        }
+        parser_service = Mock(spec=ParserService)
+        parser_service.parse_many.side_effect = RuntimeError("Node parser runtime is missing")
+        indexer = RepositoryIndexerService(repository_service, parser_service, GraphService())
+        indexer._load_documentation = Mock(return_value=[])
+        indexer._load_package_intelligence = Mock(return_value=None)
+        progress_events: list[tuple[str, str, str | None]] = []
+
+        with self.assertRaisesRegex(RuntimeError, "Node parser runtime is missing"):
+            indexer.index_repository_parallel(
+                "example",
+                os.getcwd(),
+                progress=lambda stage, status, detail=None: progress_events.append(
+                    (stage, status, detail)
+                ),
+                parse_workers=1,
+            )
+
+        self.assertIn(
+            ("parse_1", "failed", "Node parser runtime is missing"),
+            progress_events,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

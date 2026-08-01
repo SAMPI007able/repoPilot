@@ -4,5 +4,8 @@
   "type": "commonjs",
   "scripts": {
     "parse": "node --experimental-strip-types parse.ts"
+  },
+  "dependencies": {
+    "typescript": "~6.0.2"
   }
 }
