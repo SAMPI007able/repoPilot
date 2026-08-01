@@ -262,6 +262,18 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     error.value = null
   }
 
+  function clearSession() {
+    repositoryUrl.value = ''
+    projectDocuments.value = []
+    workspaces.value = []
+    activeId.value = null
+    loadingList.value = false
+    busy.value = false
+    removingIds.value = []
+    error.value = null
+    removedWorkspaceIds.clear()
+  }
+
   function upsertWorkspace(workspace: WorkspaceListItem) {
     const index = workspaces.value.findIndex((item) => item.id === workspace.id)
     if (index === -1) {
@@ -314,6 +326,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     selectWorkspace,
     removeWorkspace,
     startNewWorkspace,
+    clearSession,
   }
 })
 

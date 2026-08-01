@@ -1,7 +1,14 @@
 <script setup lang="ts">
 import { useAuthStore } from '../stores/auth'
+import { useRouter } from 'vue-router'
 
 const auth = useAuthStore()
+const router = useRouter()
+
+async function signIn() {
+  await auth.signIn()
+  if (auth.authenticated) await router.replace('/')
+}
 </script>
 
 <template>
@@ -11,7 +18,7 @@ const auth = useAuthStore()
       <h1>Sign in to continue</h1>
       <p>Connect through your organization's identity provider to access workspaces and previews.</p>
       <p v-if="auth.error" class="error-banner">{{ auth.error }}</p>
-      <button class="primary-button" :disabled="auth.loading" @click="auth.signIn">
+      <button class="primary-button" :disabled="auth.loading" @click="signIn">
         {{ auth.loading ? 'Signing in…' : 'Sign in' }}
       </button>
     </section>

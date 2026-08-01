@@ -5,9 +5,13 @@ import Sidebar from '../components/Sidebar.vue'
 import WorkspaceView from '../components/WorkspaceView.vue'
 import { useWorkspaceStore } from '../stores/workspace'
 import { useAuthStore } from '../stores/auth'
+import { usePreviewStore } from '../stores/preview'
+import { useRouter } from 'vue-router'
 
 const workspaceStore = useWorkspaceStore()
 const auth = useAuthStore()
+const previewStore = usePreviewStore()
+const router = useRouter()
 
 let workspaceRefreshTimer: number | null = null
 
@@ -23,11 +27,18 @@ onUnmounted(() => {
     window.clearInterval(workspaceRefreshTimer)
   }
 })
+
+async function signOut() {
+  workspaceStore.clearSession()
+  previewStore.clearSession()
+  await auth.signOut()
+  if (!auth.authenticated) await router.replace('/sign-in')
+}
 </script>
 
 <template>
   <div class="app-shell">
-    <button class="session-button" :title="auth.user?.primaryEmail" @click="auth.signOut">
+    <button class="session-button" :title="auth.user?.primaryEmail" @click="signOut">
       Sign out
     </button>
     <div v-if="auth.user && !auth.user.emailVerified" class="verification-banner">

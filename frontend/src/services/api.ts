@@ -19,9 +19,14 @@ export const apiBaseUrl = import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1
 
 const api = axios.create({ baseURL: apiBaseUrl })
 let accessTokenProvider: () => Promise<string | null> = async () => null
+let authenticationFailureHandler: () => Promise<void> = async () => undefined
 
 export function setAccessTokenProvider(provider: () => Promise<string | null>) {
   accessTokenProvider = provider
+}
+
+export function setAuthenticationFailureHandler(handler: () => Promise<void>) {
+  authenticationFailureHandler = handler
 }
 
 api.interceptors.request.use(async (config) => {
@@ -29,6 +34,17 @@ api.interceptors.request.use(async (config) => {
   if (token) config.headers.Authorization = `Bearer ${token}`
   return config
 })
+
+api.interceptors.response.use(
+  (response) => response,
+  async (error: unknown) => {
+    const status = typeof error === 'object' && error && 'response' in error
+      ? (error as { response?: { status?: number } }).response?.status
+      : undefined
+    if (status === 401) await authenticationFailureHandler()
+    return Promise.reject(error)
+  },
+)
 
 export async function getCurrentUser(): Promise<CurrentUser> {
   return (await api.get<CurrentUser>('/me')).data

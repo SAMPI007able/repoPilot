@@ -249,6 +249,22 @@ export const usePreviewStore = defineStore('preview', () => {
     eventAbortController = null
   }
 
+  function clearSession() {
+    disconnectEvents()
+    if (countdownTimer !== null) window.clearInterval(countdownTimer)
+    countdownTimer = null
+    workspaceId.value = null
+    instructions.value = ''
+    record.value = null
+    draft.value = null
+    activePreview.value = null
+    environment.value = {}
+    events.value = []
+    logs.value = ''
+    remainingSeconds.value = 0
+    error.value = null
+  }
+
   function setInstructions(value: string) {
     instructions.value = value
   }
@@ -285,6 +301,7 @@ export const usePreviewStore = defineStore('preview', () => {
     extend,
     setEnvironment,
     setInstructions,
+    clearSession,
   }
 })
 

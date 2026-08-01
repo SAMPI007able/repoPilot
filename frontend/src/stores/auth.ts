@@ -1,11 +1,16 @@
 import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
 import { UserManager, WebStorageStateStore, type User } from 'oidc-client-ts'
-import { getCurrentUser, setAccessTokenProvider } from '../services/api'
+import {
+  getCurrentUser,
+  setAccessTokenProvider,
+  setAuthenticationFailureHandler,
+} from '../services/api'
 import type { CurrentUser } from '../types/api'
 
 const mode = import.meta.env.VITE_AUTH_MODE || 'oidc'
 const developmentToken = import.meta.env.VITE_AUTH_DEVELOPMENT_TOKEN || ''
+const developmentSignedOutKey = 'testforge.developmentSignedOut'
 let manager: UserManager | null = null
 
 function oidcManager() {
@@ -31,10 +36,53 @@ export const useAuthStore = defineStore('auth', () => {
   const initialized = ref(false)
   const loading = ref(false)
   const error = ref<string | null>(null)
+  const developmentSignedIn = ref(
+    mode !== 'development' || window.sessionStorage.getItem(developmentSignedOutKey) !== 'true',
+  )
   const authenticated = computed(() => user.value !== null)
+  let oidcEventsBound = false
+  let handlingAuthenticationFailure = false
+
+  function navigateToSignIn() {
+    if (!['/sign-in', '/auth/callback'].includes(window.location.pathname)) {
+      window.location.assign('/sign-in')
+    }
+  }
+
+  async function handleAuthenticationFailure() {
+    if (handlingAuthenticationFailure) return
+    handlingAuthenticationFailure = true
+    try {
+      user.value = null
+      oidcUser.value = null
+      if (mode === 'development') {
+        developmentSignedIn.value = false
+        window.sessionStorage.setItem(developmentSignedOutKey, 'true')
+      } else if (manager) {
+        await manager.removeUser().catch(() => undefined)
+      }
+      navigateToSignIn()
+    } finally {
+      handlingAuthenticationFailure = false
+    }
+  }
+
+  function bindOidcEvents() {
+    if (mode === 'development' || oidcEventsBound) return
+    const oidc = oidcManager()
+    oidc.events.addUserLoaded(async (nextUser) => {
+      oidcUser.value = nextUser
+      user.value = await getCurrentUser()
+    })
+    oidc.events.addUserUnloaded(() => { void handleAuthenticationFailure() })
+    oidc.events.addAccessTokenExpired(() => { void handleAuthenticationFailure() })
+    oidcEventsBound = true
+  }
 
   async function accessToken() {
-    if (mode === 'development') return developmentToken || null
+    if (mode === 'development') {
+      return developmentSignedIn.value ? developmentToken || null : null
+    }
     return oidcUser.value?.expired ? null : oidcUser.value?.access_token ?? null
   }
 
@@ -42,8 +90,12 @@ export const useAuthStore = defineStore('auth', () => {
     if (initialized.value) return
     loading.value = true
     setAccessTokenProvider(accessToken)
+    setAuthenticationFailureHandler(handleAuthenticationFailure)
     try {
-      if (mode !== 'development') oidcUser.value = await oidcManager().getUser()
+      if (mode !== 'development') {
+        bindOidcEvents()
+        oidcUser.value = await oidcManager().getUser()
+      }
       if (await accessToken()) user.value = await getCurrentUser()
     } catch (caught) {
       user.value = null
@@ -57,7 +109,15 @@ export const useAuthStore = defineStore('auth', () => {
   async function signIn() {
     error.value = null
     if (mode === 'development') {
-      await initialize()
+      loading.value = true
+      try {
+        developmentSignedIn.value = true
+        window.sessionStorage.removeItem(developmentSignedOutKey)
+        user.value = await getCurrentUser()
+        initialized.value = true
+      } finally {
+        loading.value = false
+      }
       return
     }
     await oidcManager().signinRedirect()
@@ -76,7 +136,21 @@ export const useAuthStore = defineStore('auth', () => {
 
   async function signOut() {
     user.value = null
-    if (mode !== 'development') await oidcManager().signoutRedirect()
+    error.value = null
+    if (mode === 'development') {
+      developmentSignedIn.value = false
+      window.sessionStorage.setItem(developmentSignedOutKey, 'true')
+      return
+    }
+    oidcUser.value = null
+    const oidc = oidcManager()
+    handlingAuthenticationFailure = true
+    try {
+      await oidc.removeUser()
+    } finally {
+      handlingAuthenticationFailure = false
+    }
+    await oidc.signoutRedirect()
   }
 
   return { user, initialized, loading, error, authenticated, initialize, signIn, completeSignIn, signOut, accessToken }
