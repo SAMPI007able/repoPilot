@@ -49,6 +49,21 @@ Key endpoints:
 - `POST /ai/query` — chat or test generation
 - `POST /workspaces/impact-analysis` — analyze a target's impact
 
+Authentication
+
+Production uses OIDC Authorization Code with PKCE. Configure `OIDC_ISSUER` and
+`OIDC_AUDIENCE` on the backend and matching `VITE_OIDC_*` frontend settings.
+The backend independently verifies token signature, issuer, audience and
+lifetime, then maps `(issuer, subject)` to an internal TestForge user. Docker
+Compose uses an explicitly enabled local-only development identity.
+
+Migration 004 leaves pre-authentication workspaces unowned and invisible. After
+the intended owner signs in once, assign legacy rows explicitly:
+
+```powershell
+docker compose exec api python -m app.scripts.assign_legacy_workspaces --email developer@testforge.local
+```
+
 Persistence
 
 A checkout exists only while a build is running. After the compressed repository-index artifact is uploaded and checksum-verified, the temporary checkout is removed.

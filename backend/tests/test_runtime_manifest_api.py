@@ -11,6 +11,9 @@ from backend.tests.test_runtime_manifest import fixture_metadata
 from app.services.runtime_manifest_analyzer import DeterministicRuntimeManifestAnalyzer
 
 
+AUTH_HEADERS = {"Authorization": "Bearer testforge-test-development"}
+
+
 def manifest_record() -> RuntimeManifestRecord:
     analysis = DeterministicRuntimeManifestAnalyzer().analyze(fixture_metadata())
     now = datetime.now(timezone.utc)
@@ -36,10 +39,13 @@ class FakeRuntimeManifestService:
 
 class RuntimeManifestAPITests(unittest.TestCase):
     def test_analyze_returns_typed_manifest_without_execution(self) -> None:
-        with patch("app.main.runtime_manifest_service", FakeRuntimeManifestService()):
+        with patch("app.main.runtime_manifest_service", FakeRuntimeManifestService()), patch(
+            "app.main._authorize_workspace"
+        ):
             response = TestClient(app).post(
                 "/workspaces/workspace-id/runtime-manifest/analyze",
                 json={"instructions": "Use Vite defaults"},
+                headers=AUTH_HEADERS,
             )
 
         self.assertEqual(response.status_code, 200)
@@ -47,13 +53,16 @@ class RuntimeManifestAPITests(unittest.TestCase):
         self.assertFalse(response.json()["approved"])
 
     def test_preview_errors_use_stable_envelope(self) -> None:
-        with patch("app.main.runtime_manifest_service", FakeRuntimeManifestService()):
+        with patch("app.main.runtime_manifest_service", FakeRuntimeManifestService()), patch(
+            "app.main._authorize_workspace"
+        ):
             not_found = TestClient(app).get(
-                "/workspaces/workspace-id/runtime-manifest"
+                "/workspaces/workspace-id/runtime-manifest", headers=AUTH_HEADERS,
             )
             invalid = TestClient(app).post(
                 "/workspaces/workspace-id/runtime-manifest/analyze",
                 json={"unexpected": True},
+                headers=AUTH_HEADERS,
             )
 
         self.assertEqual(not_found.status_code, 404)

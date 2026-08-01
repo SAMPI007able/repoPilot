@@ -12,11 +12,31 @@ import type {
   RuntimeManifest,
   RuntimeManifestRecord,
   WorkspaceBuildJob,
+  CurrentUser,
 } from '../types/api'
 
 export const apiBaseUrl = import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000'
 
 const api = axios.create({ baseURL: apiBaseUrl })
+let accessTokenProvider: () => Promise<string | null> = async () => null
+
+export function setAccessTokenProvider(provider: () => Promise<string | null>) {
+  accessTokenProvider = provider
+}
+
+api.interceptors.request.use(async (config) => {
+  const token = await accessTokenProvider()
+  if (token) config.headers.Authorization = `Bearer ${token}`
+  return config
+})
+
+export async function getCurrentUser(): Promise<CurrentUser> {
+  return (await api.get<CurrentUser>('/me')).data
+}
+
+export async function getAccessToken(): Promise<string | null> {
+  return accessTokenProvider()
+}
 
 export async function startWorkspaceBuild(
   githubUrl: string,

@@ -24,6 +24,21 @@ services:
     volumes:
       - redis-data:/data
 
+  db-migrate:
+    image: postgres:17-alpine
+    environment:
+      PGPASSWORD: testforge-local
+    command:
+      - sh
+      - -ec
+      - 'for migration in /migrations/[0-9][0-9][0-9]_*.sql; do case "$$migration" in *.down.sql) continue;; esac; psql -h postgres -U testforge -d testforge -v ON_ERROR_STOP=1 -f "$$migration"; done'
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./backend/migrations:/migrations:ro
+    restart: "no"
+
   artifact-init:
     image: alpine:3.21
     user: root
@@ -43,8 +58,14 @@ services:
       PREVIEW_TRUSTED_LOCAL_EXECUTION: "true"
       PREVIEW_PUBLIC_HOST: 127.0.0.1
       PREVIEW_HEALTH_HOST: host.docker.internal
+      AUTH_MODE: development
+      AUTH_ALLOW_INSECURE_DEVELOPMENT: "true"
+      AUTH_DEVELOPMENT_TOKEN: testforge-local-development
+      AUTH_DEVELOPMENT_USER_EMAIL: developer@testforge.local
     depends_on:
       artifact-init:
+        condition: service_completed_successfully
+      db-migrate:
         condition: service_completed_successfully
       postgres:
         condition: service_healthy
@@ -91,6 +112,8 @@ services:
       context: ./frontend
       args:
         VITE_API_BASE_URL: http://127.0.0.1:8000
+        VITE_AUTH_MODE: development
+        VITE_AUTH_DEVELOPMENT_TOKEN: testforge-local-development
     depends_on:
       api:
         condition: service_healthy

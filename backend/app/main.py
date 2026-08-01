@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Body, Request, Header
+from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Body, Request, Header, Depends
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -41,6 +41,10 @@ from app.models.preview_models import (
     PreviewLogs,
     PreviewStatus,
 )
+from app.models.identity_models import CurrentUserResponse, Principal
+from app.persistence.identity_persistence_service import IdentityPersistenceService
+from app.services.auth_dependencies import AuthenticationDependencies
+from app.services.authentication import AuthenticationError, create_token_verifier
 from app.persistence.preview_persistence_service import (
     PreviewConflictError,
     PreviewManifestNotApprovedError,
@@ -129,6 +133,20 @@ async def handle_preview_lab_error(request: Request, exc: PreviewLabAPIError):
     )
 
 
+@app.exception_handler(AuthenticationError)
+async def handle_authentication_error(request: Request, exc: AuthenticationError):
+    envelope = PreviewErrorEnvelope(
+        code=exc.code, message=exc.message, retryable=exc.retryable,
+        details={}, correlationId=_correlation_id(request),
+    )
+    headers = {"WWW-Authenticate": "Bearer"} if exc.status_code == 401 else None
+    return JSONResponse(
+        status_code=exc.status_code,
+        content=envelope.model_dump(mode="json", by_alias=True),
+        headers=headers,
+    )
+
+
 @app.exception_handler(RequestValidationError)
 async def handle_request_validation(request: Request, exc: RequestValidationError):
     if "/runtime-manifest" not in request.url.path and "/previews" not in request.url.path:
@@ -180,6 +198,8 @@ os.makedirs(WORKSPACE_DIR, exist_ok=True)
 default_database_path = os.path.join(PERSISTENCE_DIR, "testforge.db").replace("\\", "/")
 database = Database(os.getenv("DATABASE_URL", f"sqlite:///{default_database_path}"))
 database.create_schema()
+identity_persistence_service = IdentityPersistenceService(database)
+auth = AuthenticationDependencies(identity_persistence_service, create_token_verifier())
 artifact_store = create_artifact_store(os.path.join(PERSISTENCE_DIR, "artifacts"))
 workspace_persistence_service = WorkspacePersistenceService(database, artifact_store)
 runtime_manifest_persistence_service = RuntimeManifestPersistenceService(database)
@@ -278,7 +298,9 @@ class GenerateTestsResponse(BaseModel):
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
-def _load_workspace(workspace_id: str) -> tuple[str, RepositoryMetadata]:
+def _load_workspace(workspace_id: str, principal: Principal) -> tuple[str, RepositoryMetadata]:
+    if not workspace_persistence_service.owns_workspace(workspace_id, principal.user_id):
+        raise HTTPException(status_code=404, detail=f"Workspace '{workspace_id}' was not found.")
     metadata = workspace_build_service.get_completed_metadata(workspace_id)
     if metadata is None:
         raise HTTPException(
@@ -288,10 +310,25 @@ def _load_workspace(workspace_id: str) -> tuple[str, RepositoryMetadata]:
     return "", metadata
 
 
+def _authorize_workspace(workspace_id: str, principal: Principal) -> None:
+    if not workspace_persistence_service.owns_workspace(workspace_id, principal.user_id):
+        raise HTTPException(status_code=404, detail=f"Workspace '{workspace_id}' was not found.")
+
+
+def _authorize_preview(preview_id: str, principal: Principal) -> None:
+    if not preview_persistence_service.is_owned_by(preview_id, principal.user_id):
+        raise PreviewLabAPIError(404, "PREVIEW_NOT_FOUND", "The preview was not found.")
+
+
 # ── Routes ───────────────────────────────────────────────────────────────────
 @app.get("/health")
 def health():
     return {"status": "ok"}
+
+
+@app.get("/me", response_model=CurrentUserResponse)
+def get_me(principal: Principal = Depends(auth.principal)):
+    return identity_persistence_service.current_user(principal.user_id)
 
 
 @app.post("/workspaces/index", response_model=WorkspaceBuildJob, status_code=202)
@@ -299,6 +336,7 @@ def index_workspace(
     githubUrl: str | None = Form(None),
     project_docs: list[UploadFile] | None = File(default=None),
     payload: IndexRequest | None = Body(None),
+    principal: Principal = Depends(auth.active_principal),
 ):
     git_url = githubUrl or (payload.githubUrl if payload else None)
     if not git_url:
@@ -309,7 +347,9 @@ def index_workspace(
             (upload.filename or "project-document", upload.file.read())
             for upload in (project_docs or [])
         ]
-        return workspace_build_service.start_build(git_url, documents)
+        return workspace_build_service.start_build(
+            git_url, documents, owner_user_id=principal.user_id
+        )
     except WorkspaceBuildAlreadyRunningError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except Exception as e:
@@ -317,21 +357,21 @@ def index_workspace(
 
 
 @app.get("/workspaces/index/{job_id}", response_model=WorkspaceBuildJob)
-def get_workspace_build(job_id: str):
-    job = workspace_build_service.get_job(job_id)
+def get_workspace_build(job_id: str, principal: Principal = Depends(auth.active_principal)):
+    job = workspace_build_service.get_job(job_id, principal.user_id)
     if job is None:
         raise HTTPException(status_code=404, detail=f"Workspace build job '{job_id}' was not found.")
     return job
 
 
 @app.get("/workspaces", response_model=list[WorkspaceSummary])
-def list_workspaces():
-    return workspace_build_service.list_workspaces()
+def list_workspaces(principal: Principal = Depends(auth.active_principal)):
+    return workspace_build_service.list_workspaces(principal.user_id)
 
 
 @app.get("/workspaces/{workspace_id}", response_model=WorkspaceDetail)
-def get_workspace(workspace_id: str):
-    workspace = workspace_build_service.get_workspace(workspace_id)
+def get_workspace(workspace_id: str, principal: Principal = Depends(auth.active_principal)):
+    workspace = workspace_build_service.get_workspace(workspace_id, principal.user_id)
     if workspace is None:
         raise HTTPException(status_code=404, detail=f"Workspace '{workspace_id}' was not found.")
     return workspace
@@ -401,7 +441,9 @@ def _raise_preview_error(exc: Exception) -> None:
 def analyze_runtime_manifest(
     workspace_id: str,
     payload: RuntimeManifestAnalyzeRequest,
+    principal: Principal = Depends(auth.active_principal),
 ):
+    _authorize_workspace(workspace_id, principal)
     try:
         return runtime_manifest_service.analyze(workspace_id, payload.instructions)
     except Exception as exc:
@@ -412,7 +454,8 @@ def analyze_runtime_manifest(
     "/workspaces/{workspace_id}/runtime-manifest",
     response_model=RuntimeManifestRecord,
 )
-def get_runtime_manifest(workspace_id: str):
+def get_runtime_manifest(workspace_id: str, principal: Principal = Depends(auth.active_principal)):
+    _authorize_workspace(workspace_id, principal)
     try:
         return runtime_manifest_service.get(workspace_id)
     except Exception as exc:
@@ -426,7 +469,9 @@ def get_runtime_manifest(workspace_id: str):
 def update_runtime_manifest(
     workspace_id: str,
     payload: RuntimeManifestUpdateRequest,
+    principal: Principal = Depends(auth.active_principal),
 ):
+    _authorize_workspace(workspace_id, principal)
     try:
         return runtime_manifest_service.update(
             workspace_id,
@@ -444,7 +489,9 @@ def update_runtime_manifest(
 def approve_runtime_manifest(
     workspace_id: str,
     payload: RuntimeManifestApproveRequest,
+    principal: Principal = Depends(auth.active_principal),
 ):
+    _authorize_workspace(workspace_id, principal)
     try:
         return runtime_manifest_service.approve(
             workspace_id,
@@ -463,7 +510,9 @@ def create_preview(
     workspace_id: str,
     payload: PreviewCreateRequest,
     idempotency_key: str = Header(alias="Idempotency-Key"),
+    principal: Principal = Depends(auth.active_principal),
 ):
+    _authorize_workspace(workspace_id, principal)
     try:
         return preview_service.create(workspace_id, idempotency_key, payload)
     except Exception as exc:
@@ -471,7 +520,8 @@ def create_preview(
 
 
 @app.get("/previews/{preview_id}", response_model=PreviewEnvironment)
-def get_preview(preview_id: str):
+def get_preview(preview_id: str, principal: Principal = Depends(auth.active_principal)):
+    _authorize_preview(preview_id, principal)
     try:
         return preview_service.get(preview_id)
     except Exception as exc:
@@ -479,7 +529,8 @@ def get_preview(preview_id: str):
 
 
 @app.get("/workspaces/{workspace_id}/previews/latest", response_model=PreviewEnvironment)
-def get_latest_preview(workspace_id: str):
+def get_latest_preview(workspace_id: str, principal: Principal = Depends(auth.active_principal)):
+    _authorize_workspace(workspace_id, principal)
     try:
         return preview_service.latest_for_workspace(workspace_id)
     except Exception as exc:
@@ -487,7 +538,8 @@ def get_latest_preview(workspace_id: str):
 
 
 @app.get("/previews/{preview_id}/logs", response_model=PreviewLogs)
-def get_preview_logs(preview_id: str):
+def get_preview_logs(preview_id: str, principal: Principal = Depends(auth.active_principal)):
+    _authorize_preview(preview_id, principal)
     try:
         return preview_service.logs_for(preview_id)
     except Exception as exc:
@@ -495,7 +547,11 @@ def get_preview_logs(preview_id: str):
 
 
 @app.get("/previews/{preview_id}/events")
-async def stream_preview_events(preview_id: str, request: Request):
+async def stream_preview_events(
+    preview_id: str, request: Request,
+    principal: Principal = Depends(auth.active_principal),
+):
+    _authorize_preview(preview_id, principal)
     try:
         preview_service.get(preview_id)
     except Exception as exc:
@@ -524,8 +580,10 @@ async def stream_preview_events(preview_id: str, request: Request):
 def stop_preview(
     preview_id: str,
     idempotency_key: str = Header(alias="Idempotency-Key"),
+    principal: Principal = Depends(auth.active_principal),
 ):
     del idempotency_key
+    _authorize_preview(preview_id, principal)
     try:
         return preview_service.stop(preview_id)
     except Exception as exc:
@@ -537,8 +595,10 @@ def extend_preview(
     preview_id: str,
     payload: PreviewExtendRequest,
     idempotency_key: str = Header(alias="Idempotency-Key"),
+    principal: Principal = Depends(auth.active_principal),
 ):
     del idempotency_key
+    _authorize_preview(preview_id, principal)
     try:
         return preview_service.extend(preview_id, payload)
     except Exception as exc:
@@ -546,7 +606,8 @@ def extend_preview(
 
 
 @app.delete("/workspaces/{workspace_id}", status_code=204)
-def delete_workspace(workspace_id: str):
+def delete_workspace(workspace_id: str, principal: Principal = Depends(auth.active_principal)):
+    _authorize_workspace(workspace_id, principal)
     try:
         active_previews = preview_persistence_service.active_for_workspace(workspace_id)
         if active_previews:
@@ -559,7 +620,7 @@ def delete_workspace(workspace_id: str):
         preview_ids = preview_persistence_service.ids_for_workspace(workspace_id)
         for preview_id in preview_ids:
             artifact_store.delete(PreviewLogService.key(preview_id))
-        if not workspace_build_service.delete_workspace(workspace_id):
+        if not workspace_build_service.delete_workspace(workspace_id, principal.user_id):
             raise HTTPException(
                 status_code=404,
                 detail=f"Workspace '{workspace_id}' was not found.",
@@ -569,7 +630,7 @@ def delete_workspace(workspace_id: str):
 
 
 @app.post("/ai/query", response_model=QueryResponse)
-def ai_query(payload: QueryRequest):
+def ai_query(payload: QueryRequest, principal: Principal = Depends(auth.active_principal)):
     """
     Unified AI query endpoint.
 
@@ -578,7 +639,7 @@ def ai_query(payload: QueryRequest):
     - "test_generation"  → generate tests for a target file/class
     """
     try:
-        _, repository_metadata = _load_workspace(payload.workspaceId)
+        _, repository_metadata = _load_workspace(payload.workspaceId, principal)
 
         if payload.type == "chat":
             if not payload.query:
@@ -640,10 +701,10 @@ def ai_query(payload: QueryRequest):
 
 
 @app.post("/ai/generate-tests", response_model=GenerateTestsResponse, deprecated=True)
-def generate_tests(payload: GenerateTestsRequest):
+def generate_tests(payload: GenerateTestsRequest, principal: Principal = Depends(auth.active_principal)):
     """Deprecated — use POST /ai/query with type=test_generation instead."""
     try:
-        _, repository_metadata = _load_workspace(payload.workspaceId)
+        _, repository_metadata = _load_workspace(payload.workspaceId, principal)
         prompt, markdown = ai_service.generate_tests(repository_metadata, payload.target, payload.type)
 
         return GenerateTestsResponse(
@@ -664,9 +725,9 @@ def generate_tests(payload: GenerateTestsRequest):
 
 
 @app.post("/workspaces/impact-analysis", response_model=ImpactAnalysisResult)
-def impact_analysis(payload: ImpactAnalysisRequest):
+def impact_analysis(payload: ImpactAnalysisRequest, principal: Principal = Depends(auth.active_principal)):
     try:
-        _, repository_metadata = _load_workspace(payload.workspaceId)
+        _, repository_metadata = _load_workspace(payload.workspaceId, principal)
         return impact_analysis_service.analyze(repository_metadata, payload.target)
     except HTTPException:
         raise

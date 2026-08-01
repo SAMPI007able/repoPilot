@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from sqlalchemy import BigInteger, DateTime, ForeignKey, JSON, String, Text, UniqueConstraint
+from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, JSON, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
@@ -16,10 +16,47 @@ class Base(DeclarativeBase):
 JSON_DOCUMENT = JSON().with_variant(JSONB, "postgresql")
 
 
+class UserRow(Base):
+    __tablename__ = "users"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    primary_email: Mapped[str] = mapped_column(String(320), nullable=False, index=True)
+    display_name: Mapped[str | None] = mapped_column(String(255))
+    avatar_url: Mapped[str | None] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    role: Mapped[str] = mapped_column(String(16), nullable=False, default="USER")
+    email_verified: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now, onupdate=utc_now)
+    last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    identities: Mapped[list["AuthIdentityRow"]] = relationship(back_populates="user", cascade="all, delete-orphan")
+    workspaces: Mapped[list["WorkspaceRow"]] = relationship(back_populates="owner")
+
+
+class AuthIdentityRow(Base):
+    __tablename__ = "auth_identities"
+    __table_args__ = (UniqueConstraint("issuer", "subject", name="uq_auth_identity_issuer_subject"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    issuer: Mapped[str] = mapped_column(String(512), nullable=False)
+    subject: Mapped[str] = mapped_column(String(512), nullable=False)
+    provider: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
+    last_authenticated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
+
+    user: Mapped[UserRow] = relationship(back_populates="identities")
+
+
 class WorkspaceRow(Base):
     __tablename__ = "workspaces"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    owner_user_id: Mapped[str | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     repo_url: Mapped[str] = mapped_column(Text, nullable=False, index=True)
     repo_name: Mapped[str] = mapped_column(String(255), nullable=False)
     commit_sha: Mapped[str | None] = mapped_column(String(64))
@@ -53,6 +90,7 @@ class WorkspaceRow(Base):
     previews: Mapped[list["PreviewEnvironmentRow"]] = relationship(
         back_populates="workspace", cascade="all, delete-orphan"
     )
+    owner: Mapped[UserRow | None] = relationship(back_populates="workspaces")
 
 
 class WorkspaceBuildRow(Base):

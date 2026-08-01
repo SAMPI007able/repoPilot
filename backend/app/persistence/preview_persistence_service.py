@@ -218,6 +218,17 @@ class PreviewPersistenceService:
                 raise PreviewNotFoundError(preview_id)
             return dict(row.provider_state or {})
 
+    def is_owned_by(self, preview_id: str, owner_user_id: str) -> bool:
+        with self.database.session() as session:
+            return session.scalar(
+                select(PreviewEnvironmentRow.id)
+                .join(WorkspaceRow, WorkspaceRow.id == PreviewEnvironmentRow.workspace_id)
+                .where(
+                    PreviewEnvironmentRow.id == preview_id,
+                    WorkspaceRow.owner_user_id == owner_user_id,
+                )
+            ) is not None
+
     @staticmethod
     def _add_event(session, preview_id: str, status: PreviewStatus, message: str, created_at: datetime) -> None:
         session.add(PreviewEventRow(

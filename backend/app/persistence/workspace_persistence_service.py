@@ -39,9 +39,12 @@ class WorkspacePersistenceService:
         self.artifact_store = artifact_store
         self.artifact_codec = artifact_codec or RepositoryArtifactCodec()
 
-    def create_workspace(self, repo_url: str, repo_name: str) -> WorkspaceSummary:
+    def create_workspace(
+        self, repo_url: str, repo_name: str, owner_user_id: str | None = None
+    ) -> WorkspaceSummary:
         workspace = WorkspaceRow(
             id=str(uuid.uuid4()),
+            owner_user_id=owner_user_id,
             repo_url=repo_url,
             repo_name=repo_name,
             status="queued",
@@ -162,11 +165,17 @@ class WorkspacePersistenceService:
     def fail_build(self, job: WorkspaceBuildJob) -> None:
         self.update_build(job)
 
-    def get_build(self, job_id: str, include_metadata: bool = True) -> WorkspaceBuildJob | None:
+    def get_build(
+        self, job_id: str, include_metadata: bool = True, owner_user_id: str | None = None
+    ) -> WorkspaceBuildJob | None:
         with self.database.session() as session:
             build = session.get(WorkspaceBuildRow, job_id)
             if build is None:
                 return None
+            if owner_user_id is not None:
+                workspace = session.get(WorkspaceRow, build.workspace_id)
+                if workspace is None or workspace.owner_user_id != owner_user_id:
+                    return None
             job = WorkspaceBuildJob(
                 jobId=build.id,
                 workspaceId=build.workspace_id,
@@ -196,11 +205,12 @@ class WorkspacePersistenceService:
         contents = self.artifact_store.get(storage_key)
         return self.artifact_codec.decode(contents, expected_checksum=checksum)
 
-    def list_workspaces(self) -> list[WorkspaceSummary]:
+    def list_workspaces(self, owner_user_id: str | None = None) -> list[WorkspaceSummary]:
         with self.database.session() as session:
-            workspaces = session.scalars(
-                select(WorkspaceRow).order_by(desc(WorkspaceRow.created_at))
-            ).all()
+            statement = select(WorkspaceRow)
+            if owner_user_id is not None:
+                statement = statement.where(WorkspaceRow.owner_user_id == owner_user_id)
+            workspaces = session.scalars(statement.order_by(desc(WorkspaceRow.created_at))).all()
             summaries = []
             for workspace in workspaces:
                 latest_build = self._latest_build(session, workspace.id)
@@ -213,10 +223,14 @@ class WorkspacePersistenceService:
                 )
             return summaries
 
-    def get_workspace(self, workspace_id: str) -> WorkspaceDetail | None:
+    def get_workspace(
+        self, workspace_id: str, owner_user_id: str | None = None
+    ) -> WorkspaceDetail | None:
         with self.database.session() as session:
             workspace = session.get(WorkspaceRow, workspace_id)
-            if workspace is None:
+            if workspace is None or (
+                owner_user_id is not None and workspace.owner_user_id != owner_user_id
+            ):
                 return None
             latest_build = self._latest_build(session, workspace.id)
             summary = self._to_summary(
@@ -230,10 +244,12 @@ class WorkspacePersistenceService:
             return None
         return WorkspaceDetail(**summary.model_dump(), metadata=metadata)
 
-    def delete_workspace(self, workspace_id: str) -> bool:
+    def delete_workspace(self, workspace_id: str, owner_user_id: str | None = None) -> bool:
         with self.database.session() as session:
             workspace = session.get(WorkspaceRow, workspace_id)
-            if workspace is None:
+            if workspace is None or (
+                owner_user_id is not None and workspace.owner_user_id != owner_user_id
+            ):
                 return False
             if workspace.status in {"queued", "running"}:
                 raise WorkspaceBuildInProgressError(
@@ -249,6 +265,15 @@ class WorkspacePersistenceService:
             if workspace is not None:
                 session.delete(workspace)
         return True
+
+    def owns_workspace(self, workspace_id: str, owner_user_id: str) -> bool:
+        with self.database.session() as session:
+            return session.scalar(
+                select(WorkspaceRow.id).where(
+                    WorkspaceRow.id == workspace_id,
+                    WorkspaceRow.owner_user_id == owner_user_id,
+                )
+            ) is not None
 
     def mark_interrupted_builds_failed(self) -> None:
         now = datetime.now(timezone.utc)

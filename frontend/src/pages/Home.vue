@@ -4,8 +4,10 @@ import Landing from '../components/Landing.vue'
 import Sidebar from '../components/Sidebar.vue'
 import WorkspaceView from '../components/WorkspaceView.vue'
 import { useWorkspaceStore } from '../stores/workspace'
+import { useAuthStore } from '../stores/auth'
 
 const workspaceStore = useWorkspaceStore()
+const auth = useAuthStore()
 
 let workspaceRefreshTimer: number | null = null
 
@@ -25,6 +27,12 @@ onUnmounted(() => {
 
 <template>
   <div class="app-shell">
+    <button class="session-button" :title="auth.user?.primaryEmail" @click="auth.signOut">
+      Sign out
+    </button>
+    <div v-if="auth.user && !auth.user.emailVerified" class="verification-banner">
+      Verify your email before creating workspaces, running AI requests, or starting previews.
+    </div>
     <Sidebar
       :workspaces="workspaceStore.workspaces"
       :active-id="workspaceStore.activeId"

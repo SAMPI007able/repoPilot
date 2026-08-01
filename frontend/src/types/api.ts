@@ -6,6 +6,18 @@ export interface ParsedFileSummary {
   existing_tests: number
 }
 
+export interface CurrentUser {
+  id: string
+  primaryEmail: string
+  displayName: string | null
+  avatarUrl: string | null
+  status: 'ACTIVE' | 'PENDING_VERIFICATION' | 'SUSPENDED' | 'DELETION_REQUESTED' | 'DELETED'
+  role: 'USER' | 'SUPPORT' | 'ADMIN'
+  emailVerified: boolean
+  createdAt: string
+  lastLoginAt: string | null
+}
+
 export interface RepositoryStatistics {
   files: number
   typescript: number

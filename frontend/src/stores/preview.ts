@@ -2,6 +2,7 @@ import { ref } from 'vue'
 import { defineStore } from 'pinia'
 import {
   apiBaseUrl,
+  getAccessToken,
   analyzeRuntimeManifest,
   approveRuntimeManifest,
   createPreview,
@@ -34,7 +35,7 @@ export const usePreviewStore = defineStore('preview', () => {
   const logs = ref('')
   const remainingSeconds = ref(0)
   const error = ref<string | null>(null)
-  let eventSource: EventSource | null = null
+  let eventAbortController: AbortController | null = null
   let countdownTimer: number | null = null
 
   async function load(nextWorkspaceId: string) {
@@ -183,17 +184,42 @@ export const usePreviewStore = defineStore('preview', () => {
 
   function connectEvents(previewId: string) {
     disconnectEvents()
-    eventSource = new EventSource(`${apiBaseUrl}/previews/${previewId}/events`)
-    eventSource.addEventListener('preview-status', async (rawEvent) => {
-      const event = JSON.parse((rawEvent as MessageEvent).data) as PreviewEvent
-      if (!events.value.some((item) => item.id === event.id)) events.value.push(event)
-      activePreview.value = await getPreview(previewId)
-      await refreshLogs()
-      updateCountdown()
-      if (isTerminal(activePreview.value.status)) disconnectEvents()
-    })
-    eventSource.onerror = () => {
-      // EventSource reconnects automatically; durable events fill any missed transitions.
+    eventAbortController = new AbortController()
+    void streamEvents(previewId, eventAbortController.signal)
+  }
+
+  async function streamEvents(previewId: string, signal: AbortSignal) {
+    try {
+      const token = await getAccessToken()
+      const response = await fetch(`${apiBaseUrl}/previews/${previewId}/events`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {}, signal,
+      })
+      if (!response.ok || !response.body) throw new Error('Preview event stream is unavailable.')
+      const reader = response.body.getReader()
+      const decoder = new TextDecoder()
+      let buffer = ''
+      while (!signal.aborted) {
+        const { value, done } = await reader.read()
+        if (done) break
+        buffer += decoder.decode(value, { stream: true })
+        let boundary = buffer.indexOf('\n\n')
+        while (boundary >= 0) {
+          const block = buffer.slice(0, boundary)
+          buffer = buffer.slice(boundary + 2)
+          const data = block.split('\n').find((line) => line.startsWith('data: '))?.slice(6)
+          if (data) {
+            const event = JSON.parse(data) as PreviewEvent
+            if (!events.value.some((item) => item.id === event.id)) events.value.push(event)
+            activePreview.value = await getPreview(previewId)
+            await refreshLogs()
+            updateCountdown()
+            if (isTerminal(activePreview.value.status)) disconnectEvents()
+          }
+          boundary = buffer.indexOf('\n\n')
+        }
+      }
+    } catch (caught) {
+      if (!signal.aborted) error.value = caught instanceof Error ? caught.message : 'Preview event stream failed.'
     }
   }
 
@@ -219,8 +245,8 @@ export const usePreviewStore = defineStore('preview', () => {
   }
 
   function disconnectEvents() {
-    eventSource?.close()
-    eventSource = null
+    eventAbortController?.abort()
+    eventAbortController = null
   }
 
   function setInstructions(value: string) {

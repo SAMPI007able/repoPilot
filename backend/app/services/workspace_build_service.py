@@ -47,6 +47,7 @@ class WorkspaceBuildService:
         self,
         git_url: str,
         documents: list[tuple[str, bytes]] | None = None,
+        owner_user_id: str | None = None,
     ) -> WorkspaceBuildJob:
         git_url = self.repository_service.validate_public_repository_url(git_url)
         repository_name = self.repository_service.extract_repo_name(git_url)
@@ -62,7 +63,7 @@ class WorkspaceBuildService:
                         f"Repository '{git_url}' is already being built."
                     )
 
-            workspace = self.persistence_service.create_workspace(git_url, repository_name)
+            workspace = self.persistence_service.create_workspace(git_url, repository_name, owner_user_id)
             job = WorkspaceBuildJob(
                 jobId=uuid.uuid4().hex,
                 workspaceId=workspace.id,
@@ -80,19 +81,19 @@ class WorkspaceBuildService:
             )
             return job.model_copy(deep=True)
 
-    def get_job(self, job_id: str) -> WorkspaceBuildJob | None:
-        return self.persistence_service.get_build(job_id)
+    def get_job(self, job_id: str, owner_user_id: str | None = None) -> WorkspaceBuildJob | None:
+        return self.persistence_service.get_build(job_id, owner_user_id=owner_user_id)
 
     def get_completed_metadata(self, workspace_id: str) -> RepositoryMetadata | None:
         return self.persistence_service.load_metadata(workspace_id)
 
-    def list_workspaces(self):
-        return self.persistence_service.list_workspaces()
+    def list_workspaces(self, owner_user_id: str | None = None):
+        return self.persistence_service.list_workspaces(owner_user_id)
 
-    def get_workspace(self, workspace_id: str):
-        return self.persistence_service.get_workspace(workspace_id)
+    def get_workspace(self, workspace_id: str, owner_user_id: str | None = None):
+        return self.persistence_service.get_workspace(workspace_id, owner_user_id)
 
-    def delete_workspace(self, workspace_id: str) -> bool:
+    def delete_workspace(self, workspace_id: str, owner_user_id: str | None = None) -> bool:
         with self._lock:
             active_job_ids = set(self._active_by_workspace.values())
             if any(
@@ -102,7 +103,7 @@ class WorkspaceBuildService:
                 raise WorkspaceBuildInProgressError(
                     "A workspace cannot be removed while its build is in progress."
                 )
-        return self.persistence_service.delete_workspace(workspace_id)
+        return self.persistence_service.delete_workspace(workspace_id, owner_user_id)
 
     def shutdown(self) -> None:
         self._executor.shutdown(wait=True)

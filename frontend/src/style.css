@@ -2031,3 +2031,13 @@ button {
     align-items: stretch;
   }
 }
+/* Authentication shell */
+.auth-page { min-height: 100vh; display: grid; place-items: center; padding: 2rem; background: #070d18; color: #e5edf8; }
+.auth-card { width: min(28rem, 100%); padding: 2rem; border: 1px solid #1f3048; border-radius: 1rem; background: #0d1625; box-shadow: 0 1.5rem 5rem #0008; }
+.auth-card h1 { margin: .4rem 0 .75rem; }
+.auth-card p { color: #91a3ba; line-height: 1.55; }
+.auth-card .eyebrow { color: #22d3ee; font-weight: 700; text-transform: uppercase; letter-spacing: .12em; font-size: .75rem; }
+.auth-card .primary-button { width: 100%; margin-top: 1rem; padding: .8rem 1rem; border: 0; border-radius: .65rem; background: #06b6d4; color: #041018; font-weight: 700; cursor: pointer; }
+.auth-card .primary-button:disabled { opacity: .55; cursor: wait; }
+.session-button { position: fixed; z-index: 50; top: .75rem; right: 1rem; border: 1px solid #263750; border-radius: .5rem; padding: .4rem .7rem; background: #0d1625; color: #aab9cc; cursor: pointer; }
+.verification-banner { position: fixed; z-index: 49; top: .75rem; left: 50%; transform: translateX(-50%); padding: .5rem .9rem; border: 1px solid #92400e; border-radius: .55rem; background: #451a03; color: #fed7aa; font-size: .82rem; }
