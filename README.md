@@ -1,6 +1,6 @@
-# TestForge AI
+# RepoPilot
 
-TestForge AI is a developer-focused assistant for generating tests, exploring repositories, and running AI-powered analysis against indexed codebases. It provides a FastAPI backend and a Vite + Vue frontend.
+RepoPilot is a developer-focused assistant for generating tests, exploring repositories, and running AI-powered analysis against indexed codebases. It provides a FastAPI backend and a Vite + Vue frontend.
 
 Key features
 
@@ -54,14 +54,14 @@ Authentication
 Production uses OIDC Authorization Code with PKCE. Configure `OIDC_ISSUER` and
 `OIDC_AUDIENCE` on the backend and matching `VITE_OIDC_*` frontend settings.
 The backend independently verifies token signature, issuer, audience and
-lifetime, then maps `(issuer, subject)` to an internal TestForge user. Docker
+lifetime, then maps `(issuer, subject)` to an internal RepoPilot user. Docker
 Compose uses an explicitly enabled local-only development identity.
 
 Migration 004 leaves pre-authentication workspaces unowned and invisible. After
 the intended owner signs in once, assign legacy rows explicitly:
 
 ```powershell
-docker compose exec api python -m app.scripts.assign_legacy_workspaces --email developer@testforge.local
+docker compose exec api python -m app.scripts.assign_legacy_workspaces --email lahiri.arnab4@gmail.com
 ```
 
 Persistence
