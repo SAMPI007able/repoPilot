@@ -55,7 +55,7 @@ class RepositoryService:
             raise ValueError("Repository URL must not include query parameters or fragments.")
         return git_url.strip()
 
-    def clone_repository(self, git_url: str, destination_path: str) -> None:
+    def clone_repository(self, git_url: str, destination_path: str, authorization: str | None = None) -> None:
         """
         Clone a Git repository from the given URL to the specified destination path.
         If the directory already exists, clear it first.
@@ -74,7 +74,16 @@ class RepositoryService:
                 # We can try to proceed anyway or raise
         
         try:
-            git.Repo.clone_from(git_url, destination_path)
+            if authorization:
+                with git.Git().custom_environment(
+                    GIT_CONFIG_COUNT="1",
+                    GIT_CONFIG_KEY_0="http.extraHeader",
+                    GIT_CONFIG_VALUE_0=f"Authorization: Bearer {authorization}",
+                    GIT_TERMINAL_PROMPT="0",
+                ):
+                    git.Repo.clone_from(git_url, destination_path)
+            else:
+                git.Repo.clone_from(git_url, destination_path)
             print(f"Repository cloned from {git_url} to {destination_path}")
         except Exception as e:
             print(f"Failed to clone repository: {e}")

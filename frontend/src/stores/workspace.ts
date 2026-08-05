@@ -1,16 +1,20 @@
 import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
+import posthog from 'posthog-js'
 import {
   deletePersistedWorkspace,
+  extractAPIError,
   getPersistedWorkspace,
   getWorkspaceBuild,
   listPersistedWorkspaces,
   startWorkspaceBuild,
+  importProviderRepository as startProviderRepositoryImport,
 } from '../services/api'
 import type {
   PersistedWorkspaceSummary,
   RepositoryMetadata,
   WorkspaceBuildStage,
+  ProviderRepository,
 } from '../types/api'
 
 export type WorkspaceStatus = 'pending' | 'building' | 'ready' | 'failed'
@@ -147,7 +151,17 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     activeId.value = workspaceId
 
     try {
+      const captureProperties = { repository_url: repositoryUrl.value.trim(), document_count: projectDocuments.value.length }
+      if (projectDocuments.value.length > 0 && typeof posthog?.capture === 'function') {
+        posthog.capture('document_uploaded', {
+          source: 'workspace_index',
+          repository_url: repositoryUrl.value.trim(),
+          document_count: projectDocuments.value.length,
+        })
+      }
       let buildJob = await startWorkspaceBuild(repositoryUrl.value.trim(), projectDocuments.value)
+      if (typeof posthog?.capture === 'function') posthog.capture('repo_connected', captureProperties)
+      if (typeof posthog?.capture === 'function') posthog.capture('repo_indexed', { workspace_id: buildJob.workspaceId, ...captureProperties })
       const persistedWorkspaceId = buildJob.workspaceId
       replaceWorkspaceId(workspaceId, persistedWorkspaceId, buildJob.jobId)
       workspaceId = persistedWorkspaceId
@@ -186,6 +200,46 @@ export const useWorkspaceStore = defineStore('workspace', () => {
       return nextMetadata
     } catch (caughtError) {
       error.value = extractMessage(caughtError, 'Failed to build workspace.')
+      patchWorkspace(workspaceId, { status: 'failed' })
+      return null
+    } finally {
+      busy.value = false
+    }
+  }
+
+  async function importProviderRepository(repository: ProviderRepository) {
+    busy.value = true
+    error.value = null
+    let workspaceId = `pending-${slugify(repository.fullName)}-${Date.now()}`
+    upsertWorkspace({
+      id: workspaceId,
+      repoName: repository.fullName,
+      repoUrl: repository.webUrl,
+      status: 'pending', docs: [], metadata: null, jobId: null, stages: initialStages(),
+    })
+    activeId.value = workspaceId
+    try {
+      const captureProperties = { provider: repository.provider, repository_name: repository.fullName }
+      let buildJob = await startProviderRepositoryImport(repository)
+      if (typeof posthog?.capture === 'function') posthog.capture('repo_connected', captureProperties)
+      if (typeof posthog?.capture === 'function') posthog.capture('repo_indexed', { workspace_id: buildJob.workspaceId, ...captureProperties })
+      replaceWorkspaceId(workspaceId, buildJob.workspaceId, buildJob.jobId)
+      workspaceId = buildJob.workspaceId
+      patchWorkspace(workspaceId, { status: 'building', jobId: buildJob.jobId, stages: mapBuildStages(buildJob.stages) })
+      while (buildJob.status === 'queued' || buildJob.status === 'running') {
+        await wait(400)
+        buildJob = await getWorkspaceBuild(buildJob.jobId)
+        patchWorkspace(workspaceId, { status: buildJob.status === 'failed' ? 'failed' : 'building', stages: mapBuildStages(buildJob.stages) })
+      }
+      if (buildJob.status === 'failed') throw new Error(buildJob.error ?? 'Workspace build failed.')
+      if (!buildJob.metadata) throw new Error('Workspace build completed without repository metadata.')
+      patchWorkspace(workspaceId, {
+        repoName: buildJob.metadata.repository, status: 'ready', metadata: buildJob.metadata,
+        stages: mapBuildStages(buildJob.stages),
+      })
+      return buildJob.metadata
+    } catch (caughtError) {
+      error.value = extractMessage(caughtError, 'Failed to import repository.')
       patchWorkspace(workspaceId, { status: 'failed' })
       return null
     } finally {
@@ -235,7 +289,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
       error.value = 'Wait for the workspace build to finish before removing it.'
       return
     }
-    if (!window.confirm(`Remove "${workspace.repoName}" from TestForge AI? This cannot be undone.`)) {
+    if (!window.confirm(`Remove "${workspace.repoName}" from RepoPilot? This cannot be undone.`)) {
       return
     }
 
@@ -321,6 +375,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     targetOptions,
     loadWorkspaces,
     createWorkspace,
+    importProviderRepository,
     setRepositoryUrl,
     setProjectDocuments,
     selectWorkspace,
@@ -331,16 +386,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
 })
 
 function extractMessage(error: unknown, fallback: string) {
-  if (typeof error === 'object' && error && 'response' in error) {
-    const maybeResponse = error as { response?: { data?: { detail?: string } } }
-    return maybeResponse.response?.data?.detail ?? fallback
-  }
-
-  if (error instanceof Error) {
-    return error.message
-  }
-
-  return fallback
+  return extractAPIError(error, fallback).message
 }
 
 function extractRepoName(url: string) {

@@ -12,6 +12,12 @@ const router = createRouter({
       component: Home,
       meta: { public: true },
     },
+    {
+      path: '/repositories',
+      name: 'repositories',
+      component: Home,
+      meta: { requiresAuth: true },
+    },
     { path: '/sign-in', name: 'sign-in', component: SignIn, meta: { public: true } },
     { path: '/auth/callback', name: 'auth-callback', component: AuthCallback, meta: { public: true } },
     {

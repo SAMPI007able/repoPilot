@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, watch } from 'vue'
+import posthog from 'posthog-js'
 import { CheckCircle2, Clock3, ExternalLink, FlaskConical, Info, ShieldAlert, Sparkles, Square, Terminal } from '@lucide/vue'
 import { usePreviewStore } from '../stores/preview'
 
@@ -37,6 +38,12 @@ watch(() => props.workspaceId, (workspaceId) => previewStore.load(workspaceId), 
 
 function parseEnvironmentNames(value: string) {
   return [...new Set(value.split(',').map((item) => item.trim().toUpperCase()).filter(Boolean))]
+}
+
+function captureBrowserOpened(source: string) {
+  if (typeof posthog?.capture === 'function') {
+    posthog.capture('browser_opened', { source })
+  }
 }
 </script>
 
@@ -138,8 +145,8 @@ function parseEnvironmentNames(value: string) {
         </div>
 
         <div class="preview-runtime__actions">
-          <button class="btn btn-primary" type="button" :disabled="!canStart || previewStore.starting" @click="previewStore.start">{{ previewStore.starting ? 'Queuing...' : 'Start preview' }}</button>
-          <a v-if="previewStore.activePreview?.previewUrl" class="btn btn-ghost" :href="previewStore.activePreview.previewUrl" target="_blank" rel="noopener noreferrer"><ExternalLink :size="15" /> Open preview</a>
+          <button class="btn btn-primary" type="button" :disabled="!canStart || previewStore.starting || previewStore.concurrencyBlocked" @click="previewStore.start">{{ previewStore.starting ? 'Queuing...' : 'Start preview' }}</button>
+          <a v-if="previewStore.activePreview?.previewUrl" class="btn btn-ghost" :href="previewStore.activePreview.previewUrl" target="_blank" rel="noopener noreferrer" @click="captureBrowserOpened('preview')"><ExternalLink :size="15" /> Open preview</a>
           <button v-if="previewStore.activePreview?.status === 'ready'" class="btn btn-ghost" type="button" :disabled="previewStore.extending" @click="previewStore.extend"><Clock3 :size="15" /> {{ previewStore.extending ? 'Extending...' : `Extend · ${formattedRemaining}` }}</button>
           <button v-if="canStop" class="btn btn-danger" type="button" :disabled="previewStore.stopping" @click="previewStore.stop"><Square :size="14" /> {{ previewStore.stopping ? 'Stopping...' : 'Stop' }}</button>
         </div>

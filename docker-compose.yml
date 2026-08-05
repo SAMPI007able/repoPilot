@@ -49,6 +49,8 @@ services:
 
   api:
     build: ./backend
+    env_file:
+      - ./backend/.env
     environment: &backend-environment
       DATABASE_URL: postgresql://testforge:testforge-local@postgres:5432/testforge
       REDIS_URL: redis://redis:6379/0
@@ -58,10 +60,9 @@ services:
       PREVIEW_TRUSTED_LOCAL_EXECUTION: "true"
       PREVIEW_PUBLIC_HOST: 127.0.0.1
       PREVIEW_HEALTH_HOST: host.docker.internal
-      AUTH_MODE: development
-      AUTH_ALLOW_INSECURE_DEVELOPMENT: "true"
-      AUTH_DEVELOPMENT_TOKEN: testforge-local-development
-      AUTH_DEVELOPMENT_USER_EMAIL: developer@testforge.local
+      AUTH_MODE: oidc
+      OAUTH_CALLBACK_BASE_URL: http://127.0.0.1:8000
+      FRONTEND_URL: http://127.0.0.1:5173
     depends_on:
       artifact-init:
         condition: service_completed_successfully
@@ -84,6 +85,8 @@ services:
   preview-worker:
     build: ./backend
     command: ["sh", "-c", "umask 0002 && exec rq worker previews --url redis://redis:6379/0"]
+    env_file:
+      - ./backend/.env
     environment: *backend-environment
     user: root
     group_add:
@@ -100,6 +103,8 @@ services:
   preview-reconciler:
     build: ./backend
     command: ["python", "-m", "app.workers.preview_reconciler"]
+    env_file:
+      - ./backend/.env
     environment: *backend-environment
     depends_on:
       api:
@@ -112,8 +117,17 @@ services:
       context: ./frontend
       args:
         VITE_API_BASE_URL: http://127.0.0.1:8000
-        VITE_AUTH_MODE: development
-        VITE_AUTH_DEVELOPMENT_TOKEN: testforge-local-development
+        VITE_AUTH_MODE: ${VITE_AUTH_MODE:-oidc}
+        VITE_AUTH_DEVELOPMENT_TOKEN: ${VITE_AUTH_DEVELOPMENT_TOKEN:-}
+        VITE_OIDC_AUTHORITY: ${VITE_OIDC_AUTHORITY:-}
+        VITE_OIDC_CLIENT_ID: ${VITE_OIDC_CLIENT_ID:-}
+        VITE_OIDC_AUDIENCE: ${VITE_OIDC_AUDIENCE:-}
+        VITE_OIDC_REDIRECT_URI: ${VITE_OIDC_REDIRECT_URI:-http://127.0.0.1:5173/auth/callback}
+        VITE_OIDC_SCOPE: ${VITE_OIDC_SCOPE:-openid profile email}
+        VITE_OIDC_CONNECTION_PARAMETER: ${VITE_OIDC_CONNECTION_PARAMETER:-connection}
+        VITE_OIDC_GITHUB_CONNECTION: ${VITE_OIDC_GITHUB_CONNECTION:-github}
+        VITE_OIDC_GOOGLE_CONNECTION: ${VITE_OIDC_GOOGLE_CONNECTION:-google-oauth2}
+        VITE_OIDC_EMAIL_CONNECTION: ${VITE_OIDC_EMAIL_CONNECTION:-Username-Password-Authentication}
     depends_on:
       api:
         condition: service_healthy

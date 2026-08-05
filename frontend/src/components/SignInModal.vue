@@ -15,10 +15,10 @@ const emit = defineEmits<{
       <button class="auth-modal__close" type="button" aria-label="Close sign-in" @click="emit('close')">
         <X :size="18" />
       </button>
-      <p class="eyebrow">TestForge AI</p>
+      <p class="eyebrow">RepoPilot</p>
       <h2 id="sign-in-title">Sign in to build your workspace</h2>
       <p class="auth-modal__copy">
-        Your home page stays public. Authentication is only required when TestForge starts processing a repository.
+        Your home page stays public. Authentication is only required when RepoPilot starts processing a repository.
       </p>
       <p v-if="error" class="error-text">{{ error }}</p>
       <div class="auth-options">
@@ -33,7 +33,7 @@ const emit = defineEmits<{
         </button>
       </div>
       <p class="auth-modal__security">
-        Email and password are entered on the secure identity-provider page; TestForge never receives or stores your password.
+        Email and password are entered on the secure identity-provider page; RepoPilot never receives or stores your password.
       </p>
     </section>
   </div>

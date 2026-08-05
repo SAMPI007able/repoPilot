@@ -1,7 +1,9 @@
 import { ref } from 'vue'
 import { defineStore } from 'pinia'
+import posthog from 'posthog-js'
 import {
   apiBaseUrl,
+  extractAPIError,
   getAccessToken,
   analyzeRuntimeManifest,
   approveRuntimeManifest,
@@ -35,6 +37,7 @@ export const usePreviewStore = defineStore('preview', () => {
   const logs = ref('')
   const remainingSeconds = ref(0)
   const error = ref<string | null>(null)
+  const concurrencyBlocked = ref(false)
   let eventAbortController: AbortController | null = null
   let countdownTimer: number | null = null
 
@@ -131,15 +134,22 @@ export const usePreviewStore = defineStore('preview', () => {
     starting.value = true
     error.value = null
     try {
+      concurrencyBlocked.value = false
       activePreview.value = await createPreview(
         workspaceId.value, environment.value, crypto.randomUUID(),
       )
+      if (typeof posthog?.capture === 'function') posthog.capture('preview_started', {
+        workspace_id: workspaceId.value,
+        preview_id: activePreview.value.id,
+      })
       events.value = []
       logs.value = ''
       connectEvents(activePreview.value.id)
       startCountdown()
     } catch (caughtError) {
       error.value = extractPreviewError(caughtError, 'Failed to start the preview.')
+      concurrencyBlocked.value = extractAPIError(caughtError, '').code === 'CONCURRENCY_LIMIT_EXCEEDED'
+      if (concurrencyBlocked.value && workspaceId.value) await loadLatest(workspaceId.value)
     } finally {
       starting.value = false
     }
@@ -151,6 +161,11 @@ export const usePreviewStore = defineStore('preview', () => {
     error.value = null
     try {
       activePreview.value = await stopPreview(activePreview.value.id)
+      if (typeof posthog?.capture === 'function') posthog.capture('preview_completed', {
+        preview_id: activePreview.value.id,
+        status: activePreview.value.status,
+      })
+      concurrencyBlocked.value = false
     } catch (caughtError) {
       error.value = extractPreviewError(caughtError, 'Failed to stop the preview.')
     } finally {
@@ -164,6 +179,10 @@ export const usePreviewStore = defineStore('preview', () => {
     error.value = null
     try {
       activePreview.value = await extendPreview(activePreview.value.id)
+      if (typeof posthog?.capture === 'function') posthog.capture('preview_started', {
+        preview_id: activePreview.value.id,
+        extended: true,
+      })
       updateCountdown()
     } catch (caughtError) {
       error.value = extractPreviewError(caughtError, 'Failed to extend the preview.')
@@ -263,6 +282,7 @@ export const usePreviewStore = defineStore('preview', () => {
     logs.value = ''
     remainingSeconds.value = 0
     error.value = null
+    concurrencyBlocked.value = false
   }
 
   function setInstructions(value: string) {
@@ -292,6 +312,7 @@ export const usePreviewStore = defineStore('preview', () => {
     logs,
     remainingSeconds,
     error,
+    concurrencyBlocked,
     load,
     analyze,
     save,
@@ -324,8 +345,8 @@ function extractPreviewError(error: unknown, fallback: string) {
       if (Array.isArray(violations) && violations.length) {
         return `${response.data.message} ${violations.join(' ')}`
       }
-      return response.data.message
+      return extractAPIError(error, fallback).message
     }
   }
-  return error instanceof Error ? error.message : fallback
+  return extractAPIError(error, fallback).message
 }

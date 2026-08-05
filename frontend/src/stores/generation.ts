@@ -1,7 +1,9 @@
 import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
-import { analyzeImpact, generateTests, queryAI } from '../services/api'
+import posthog from 'posthog-js'
+import { analyzeImpact, extractAPIError, generateTests, queryAI } from '../services/api'
 import { useWorkspaceStore } from './workspace'
+import { useFeatureFlagStore } from './features'
 import type { AIQueryResponse, ImpactAnalysisResponse } from '../types/api'
 
 export type TabId = 'ask' | 'tests' | 'preview' | 'insights' | 'impact'
@@ -9,6 +11,7 @@ export type TestMode = 'scenario' | 'file'
 
 export const useGenerationStore = defineStore('generation', () => {
   const workspaceStore = useWorkspaceStore()
+  const featureFlags = useFeatureFlagStore()
   const tab = ref<TabId>('ask')
   const mode = ref<TestMode>('scenario')
   const target = ref('')
@@ -29,8 +32,8 @@ export const useGenerationStore = defineStore('generation', () => {
   const tabs = computed(() => [
     { id: 'ask' as TabId, label: 'Ask the codebase' },
     { id: 'tests' as TabId, label: 'Generate tests' },
-    { id: 'preview' as TabId, label: 'Realtime preview' },
-    { id: 'insights' as TabId, label: 'Code quality' },
+    ...(featureFlags.previewEnabled ? [{ id: 'preview' as TabId, label: 'Realtime preview' }] : []),
+    ...(featureFlags.codeQualityEnabled ? [{ id: 'insights' as TabId, label: 'Code quality' }] : []),
     { id: 'impact' as TabId, label: 'Impact analysis' },
   ])
 
@@ -74,6 +77,10 @@ export const useGenerationStore = defineStore('generation', () => {
     genericQuery.value = ''
 
     try {
+      if (typeof posthog?.capture === 'function') posthog.capture('chat_message', {
+        workspace_id: workspaceId,
+        query_length: queryText.length,
+      })
       const response = await queryAI({
         type: 'chat',
         workspaceId,
@@ -193,7 +200,7 @@ export const useGenerationStore = defineStore('generation', () => {
   }
 
   function setTab(value: TabId) {
-    tab.value = value
+    if (tabs.value.some((item) => item.id === value)) tab.value = value
   }
 
   function setMode(value: TestMode) {
@@ -272,14 +279,5 @@ export const useGenerationStore = defineStore('generation', () => {
 })
 
 function extractMessage(error: unknown, fallback: string) {
-  if (typeof error === 'object' && error && 'response' in error) {
-    const maybeResponse = error as { response?: { data?: { detail?: string } } }
-    return maybeResponse.response?.data?.detail ?? fallback
-  }
-
-  if (error instanceof Error) {
-    return error.message
-  }
-
-  return fallback
+  return extractAPIError(error, fallback).message
 }

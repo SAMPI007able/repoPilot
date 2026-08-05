@@ -1,6 +1,6 @@
 from fastapi import Header
 
-from app.models.identity_models import Principal, UserStatus
+from app.models.identity_models import Principal, UserRole, UserStatus
 from app.persistence.identity_persistence_service import IdentityPersistenceService
 from app.services.authentication import AuthenticationError, TokenVerifier
 
@@ -24,4 +24,10 @@ class AuthenticationDependencies:
             raise AuthenticationError(403, "EMAIL_VERIFICATION_REQUIRED", "Verify your email before using TestForge resources.")
         if principal.status != UserStatus.ACTIVE:
             raise AuthenticationError(403, "USER_NOT_ACTIVE", "This TestForge account is not active.")
+        return principal
+
+    def admin_principal(self, authorization: str | None = Header(default=None)) -> Principal:
+        principal = self.active_principal(authorization)
+        if principal.role != UserRole.ADMIN:
+            raise AuthenticationError(403, "ADMIN_REQUIRED", "Administrator access is required.")
         return principal

@@ -33,6 +33,9 @@ class UserRow(Base):
 
     identities: Mapped[list["AuthIdentityRow"]] = relationship(back_populates="user", cascade="all, delete-orphan")
     workspaces: Mapped[list["WorkspaceRow"]] = relationship(back_populates="owner")
+    oauth_connections: Mapped[list["OAuthConnectionRow"]] = relationship(
+        back_populates="user", cascade="all, delete-orphan"
+    )
 
 
 class AuthIdentityRow(Base):
@@ -48,6 +51,51 @@ class AuthIdentityRow(Base):
     last_authenticated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
 
     user: Mapped[UserRow] = relationship(back_populates="identities")
+
+
+class OAuthConnectionRow(Base):
+    __tablename__ = "oauth_connections"
+    __table_args__ = (UniqueConstraint("user_id", "provider", name="uq_oauth_connection_user_provider"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    provider: Mapped[str] = mapped_column(String(32), nullable=False)
+    access_token_ciphertext: Mapped[str] = mapped_column(Text, nullable=False)
+    refresh_token_ciphertext: Mapped[str | None] = mapped_column(Text)
+    token_type: Mapped[str] = mapped_column(String(32), nullable=False, default="Bearer")
+    scopes: Mapped[list] = mapped_column(JSON_DOCUMENT, nullable=False, default=list)
+    external_account_id: Mapped[str | None] = mapped_column(String(255))
+    external_account_name: Mapped[str | None] = mapped_column(String(255))
+    external_avatar_url: Mapped[str | None] = mapped_column(Text)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now, onupdate=utc_now)
+
+    user: Mapped[UserRow] = relationship(back_populates="oauth_connections")
+
+
+class OAuthStateRow(Base):
+    __tablename__ = "oauth_states"
+
+    state_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    provider: Mapped[str] = mapped_column(String(32), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
+
+
+class FeatureFlagRow(Base):
+    __tablename__ = "feature_flags"
+
+    key: Mapped[str] = mapped_column(String(100), primary_key=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    description: Mapped[str | None] = mapped_column(String(500))
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now, onupdate=utc_now
+    )
+    updated_by_user_id: Mapped[str | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
+    )
 
 
 class WorkspaceRow(Base):

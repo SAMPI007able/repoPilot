@@ -18,6 +18,38 @@ export interface CurrentUser {
   lastLoginAt: string | null
 }
 
+export type FeatureFlagKey = 'preview' | 'code_quality'
+
+export interface FeatureFlagsResponse {
+  flags: Record<string, boolean>
+}
+
+export type SourceControlProvider = 'github' | 'gitlab' | 'bitbucket'
+
+export interface ProviderConnection {
+  provider: SourceControlProvider
+  name: string
+  configured: boolean
+  connected: boolean
+  accountName: string | null
+  avatarUrl: string | null
+}
+
+export interface ProviderRepository {
+  id: string
+  provider: SourceControlProvider
+  owner: string
+  name: string
+  fullName: string
+  description: string | null
+  private: boolean
+  defaultBranch: string
+  webUrl: string
+  cloneUrl: string
+  updatedAt: string | null
+  stars?: number
+}
+
 export interface RepositoryStatistics {
   files: number
   typescript: number

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { onMounted, ref, watch } from 'vue'
 import type { WorkspaceListItem } from '../stores/workspace'
-import { ChevronLeft, ChevronRight, GitBranch, LoaderCircle, Trash2 } from '@lucide/vue'
+import { ChevronLeft, ChevronRight, FolderGit2, GitBranch, LoaderCircle, Trash2 } from '@lucide/vue'
 
 const SIDEBAR_STORAGE_KEY = 'testforge.sidebar.collapsed'
 
@@ -10,12 +10,14 @@ defineProps<{
   activeId: string | null
   loading: boolean
   removingIds: string[]
+  activeSection?: 'workspace' | 'repositories'
 }>()
 
 const emit = defineEmits<{
   (e: 'select', id: string): void
   (e: 'remove', id: string): void
   (e: 'new'): void
+  (e: 'repositories'): void
 }>()
 
 const collapsed = ref(false)
@@ -52,11 +54,11 @@ const statusMap = {
 
     <div class="brand-block">
       <div class="brand-block__icon">
-        <span class="glyph glyph--brand">TF</span>
+        <span class="glyph glyph--brand">RP</span>
       </div>
       <div class="brand-block__copy">
-        <div class="brand-block__title">TestForge AI</div>
-        <div class="brand-block__subtitle">Understand. Answer. Test.</div>
+        <div class="brand-block__title">RepoPilot</div>
+        <div class="brand-block__subtitle">Understand, run and validate any codebase</div>
       </div>
     </div>
 
@@ -70,6 +72,18 @@ const statusMap = {
       >
         <span class="glyph glyph--button">+</span>
         <span class="sidebar__action-label">New workspace</span>
+      </button>
+      <button
+        class="btn btn-ghost btn-full sidebar__repository-link"
+        :class="{ 'sidebar__repository-link--active': activeSection === 'repositories' }"
+        type="button"
+        aria-label="Your repositories"
+        title="Your repositories"
+        @click="emit('repositories')"
+      >
+        <FolderGit2 aria-hidden="true" />
+        <span class="sidebar__action-label">Your repositories</span>
+        <ChevronRight class="sidebar__action-arrow" aria-hidden="true" />
       </button>
     </div>
 

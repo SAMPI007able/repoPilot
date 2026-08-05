@@ -10,6 +10,7 @@ import RepoStatsPanel from './RepoStatsPanel.vue'
 import RealtimePreviewLab from './RealtimePreviewLab.vue'
 import TestGenPanel from './TestGenPanel.vue'
 import { useGenerationStore } from '../stores/generation'
+import { useFeatureFlagStore } from '../stores/features'
 import type { RepositoryMetadata } from '../types/api'
 import type { WorkspaceListItem, WorkspaceStage } from '../stores/workspace'
 
@@ -22,6 +23,7 @@ const props = defineProps<{
 }>()
 
 const generationStore = useGenerationStore()
+const featureFlags = useFeatureFlagStore()
 
 const safeMetadata = computed<RepositoryMetadata>(() => ({
   repository: props.workspace.repoName,
@@ -150,11 +152,14 @@ const insightItems = [] as Array<{ title: string; path: string; severity: string
     />
 
     <RealtimePreviewLab
-      v-else-if="generationStore.tab === 'preview'"
+      v-else-if="generationStore.tab === 'preview' && featureFlags.previewEnabled"
       :workspace-id="workspace.id"
     />
 
-    <InsightsPanel v-else-if="generationStore.tab === 'insights'" :items="insightItems" />
+    <InsightsPanel
+      v-else-if="generationStore.tab === 'insights' && featureFlags.codeQualityEnabled"
+      :items="insightItems"
+    />
 
     <ImpactPanel
       v-else

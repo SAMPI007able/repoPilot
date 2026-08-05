@@ -16,7 +16,7 @@ async function signIn(method: SignInMethod) {
 <template>
   <main class="auth-page">
     <section class="auth-card">
-      <p class="eyebrow">TestForge AI</p>
+      <p class="eyebrow">RepoPilot</p>
       <h1>Sign in to continue</h1>
       <p>Choose a secure sign-in method to access workspaces and previews.</p>
       <p v-if="auth.error" class="error-banner">{{ auth.error }}</p>
@@ -31,7 +31,7 @@ async function signIn(method: SignInMethod) {
           <Mail :size="19" /> Continue with email
         </button>
       </div>
-      <p class="auth-modal__security">Passwords are handled by the configured identity provider, not TestForge.</p>
+      <p class="auth-modal__security">Passwords are handled by the configured identity provider, not RepoPilot.</p>
     </section>
   </main>
 </template>

@@ -1,6 +1,6 @@
-# TestForge AI frontend
+# RepoPilot frontend
 
-Vue 3, TypeScript, Pinia, Axios, and Vite provide the TestForge control-plane UI.
+Vue 3, TypeScript, Pinia, Axios, and Vite provide the RepoPilot control-plane UI.
 
 ```powershell
 npm install

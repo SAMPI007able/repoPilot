@@ -1,9 +1,12 @@
 <script setup lang="ts">
-import { onUnmounted, ref, watch } from 'vue'
+import { computed, onUnmounted, ref, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import Landing from '../components/Landing.vue'
 import SignInModal from '../components/SignInModal.vue'
 import Sidebar from '../components/Sidebar.vue'
+import UserMenu from '../components/UserMenu.vue'
 import WorkspaceView from '../components/WorkspaceView.vue'
+import RepositoriesPage from './RepositoriesPage.vue'
 import { useWorkspaceStore } from '../stores/workspace'
 import { useAuthStore } from '../stores/auth'
 import { usePreviewStore } from '../stores/preview'
@@ -12,7 +15,10 @@ import type { SignInMethod } from '../stores/auth'
 const workspaceStore = useWorkspaceStore()
 const auth = useAuthStore()
 const previewStore = usePreviewStore()
+const route = useRoute()
+const router = useRouter()
 const signInOpen = ref(false)
+const repositoriesPage = computed(() => route.name === 'repositories')
 const pendingBuildKey = 'testforge.pendingWorkspaceBuild'
 
 let workspaceRefreshTimer: number | null = null
@@ -81,13 +87,40 @@ async function signIn(method: SignInMethod) {
     if (workspaceStore.repositoryUrl.trim()) await workspaceStore.createWorkspace()
   }
 }
+
+async function showRepositories() {
+  if (!auth.authenticated) {
+    signInOpen.value = true
+    return
+  }
+  workspaceStore.startNewWorkspace()
+  await router.push({ name: 'repositories' })
+}
+
+async function startNewWorkspace() {
+  workspaceStore.startNewWorkspace()
+  await router.push({ name: 'home' })
+}
+
+async function selectWorkspace(id: string) {
+  await router.push({ name: 'home' })
+  await workspaceStore.selectWorkspace(id)
+}
+
+async function importRepository(repository: import('../types/api').ProviderRepository) {
+  await router.push({ name: 'home' })
+  await workspaceStore.importProviderRepository(repository)
+}
 </script>
 
 <template>
   <div class="app-shell">
-    <button class="session-button" :title="auth.user?.primaryEmail" @click="auth.authenticated ? signOut() : (signInOpen = true)">
-      {{ auth.authenticated ? 'Sign out' : 'Sign in' }}
-    </button>
+    <UserMenu
+      :user="auth.user"
+      :loading="auth.loading"
+      @sign-in="signInOpen = true"
+      @sign-out="signOut"
+    />
     <div v-if="auth.user && !auth.user.emailVerified" class="verification-banner">
       Verify your email before creating workspaces, running AI requests, or starting previews.
     </div>
@@ -97,14 +130,23 @@ async function signIn(method: SignInMethod) {
       :active-id="workspaceStore.activeId"
       :loading="workspaceStore.loadingList"
       :removing-ids="workspaceStore.removingIds"
-      @select="workspaceStore.selectWorkspace"
+      :active-section="repositoriesPage ? 'repositories' : 'workspace'"
+      @select="selectWorkspace"
       @remove="workspaceStore.removeWorkspace"
-      @new="workspaceStore.startNewWorkspace"
+      @new="startNewWorkspace"
+      @repositories="showRepositories"
     />
 
     <main class="app-main scrollbar-thin">
+      <RepositoriesPage
+        v-if="repositoriesPage"
+        :busy="workspaceStore.busy"
+        @back="startNewWorkspace"
+        @import="importRepository"
+      />
+
       <WorkspaceView
-        v-if="workspaceStore.activeWorkspace"
+        v-else-if="workspaceStore.activeWorkspace"
         :workspace="workspaceStore.activeWorkspace"
         :metadata="workspaceStore.metadata"
         :framework-label="workspaceStore.frameworkLabel"
@@ -118,10 +160,10 @@ async function signIn(method: SignInMethod) {
         :docs="workspaceStore.projectDocuments"
         :busy="workspaceStore.busy"
         :error="workspaceStore.error"
-        :authenticated="auth.authenticated"
         @update:repo-url="workspaceStore.setRepositoryUrl"
         @update:docs="workspaceStore.setProjectDocuments"
         @create="requestWorkspaceBuild"
+        @browse-repositories="showRepositories"
       />
     </main>
     <SignInModal

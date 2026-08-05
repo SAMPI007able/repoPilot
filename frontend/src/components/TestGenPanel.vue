@@ -66,7 +66,7 @@ const emit = defineEmits<{
       </label>
       <div class="scenario-actions">
         <p class="helper-text">
-          No file selection is needed. TestForge discovers the related modules and follows their dependency boundaries.
+          No file selection is needed. RepoPilot discovers the related modules and follows their dependency boundaries.
         </p>
         <button class="btn btn-primary" type="button" :disabled="busy || !scenario.trim()" @click="emit('generate:scenario')">
           Generate from requirement
@@ -126,7 +126,7 @@ const emit = defineEmits<{
       </div>
 
       <p class="helper-text">
-        TestForge reads the selected file, infers its public API and edge cases, and produces a battery of scenario tests.
+        RepoPilot reads the selected file, infers its public API and edge cases, and produces a battery of scenario tests.
       </p>
     </div>
 

@@ -13,13 +13,19 @@ onMounted(async () => {
     await router.replace('/')
   } catch (caught) {
     error.value = caught instanceof Error ? caught.message : 'Sign-in callback failed.'
+    console.error('Auth callback failed', caught)
   }
 })
 </script>
 
 <template>
-  <main class="auth-page"><section class="auth-card">
-    <h1>{{ error ? 'Unable to sign in' : 'Completing sign-in…' }}</h1>
-    <p v-if="error" class="error-banner">{{ error }}</p>
-  </section></main>
+  <main class="auth-page">
+    <section class="auth-card">
+      <h1>{{ error ? 'Unable to sign in' : 'Completing sign-in...' }}</h1>
+      <p v-if="error" class="error-banner">{{ error }}</p>
+      <button v-if="error" class="primary-button" type="button" @click="router.replace('/')">
+        Return home and sign in again
+      </button>
+    </section>
+  </main>
 </template>

@@ -13,6 +13,10 @@ import type {
   RuntimeManifestRecord,
   WorkspaceBuildJob,
   CurrentUser,
+  ProviderConnection,
+  ProviderRepository,
+  SourceControlProvider,
+  FeatureFlagsResponse,
 } from '../types/api'
 
 export const apiBaseUrl = import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000'
@@ -20,6 +24,31 @@ export const apiBaseUrl = import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1
 const api = axios.create({ baseURL: apiBaseUrl })
 let accessTokenProvider: () => Promise<string | null> = async () => null
 let authenticationFailureHandler: () => Promise<void> = async () => undefined
+
+export interface APIErrorEnvelope {
+  code?: string
+  message?: string
+  details?: { resetAt?: string; [key: string]: unknown }
+}
+
+export function extractAPIError(error: unknown, fallback: string): { message: string; code?: string; status?: number } {
+  if (typeof error === 'object' && error && 'response' in error) {
+    const response = (error as { response?: { status?: number; data?: APIErrorEnvelope | { detail?: string } } }).response
+    const data = response?.data
+    if (data && 'message' in data && data.message) {
+      const resetAt = data.details?.resetAt
+      const resetMessage = resetAt
+        ? ` Resets ${new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(resetAt))}.`
+        : ''
+      return { message: `${data.message}${resetMessage}`, code: data.code, status: response?.status }
+    }
+    if (data && 'detail' in data && typeof data.detail === 'string') {
+      return { message: data.detail, status: response?.status }
+    }
+    return { message: fallback, status: response?.status }
+  }
+  return { message: error instanceof Error ? error.message : fallback }
+}
 
 export function setAccessTokenProvider(provider: () => Promise<string | null>) {
   accessTokenProvider = provider
@@ -48,6 +77,35 @@ api.interceptors.response.use(
 
 export async function getCurrentUser(): Promise<CurrentUser> {
   return (await api.get<CurrentUser>('/me')).data
+}
+
+export async function getFeatureFlags(): Promise<FeatureFlagsResponse> {
+  return (await api.get<FeatureFlagsResponse>('/feature-flags')).data
+}
+
+export async function listProviderConnections(): Promise<ProviderConnection[]> {
+  return (await api.get<ProviderConnection[]>('/integrations')).data
+}
+
+export async function connectProvider(provider: SourceControlProvider): Promise<string> {
+  return (await api.get<{ authorizationUrl: string }>(`/integrations/${provider}/connect`)).data.authorizationUrl
+}
+
+export async function disconnectProvider(provider: SourceControlProvider): Promise<void> {
+  await api.delete(`/integrations/${provider}`)
+}
+
+export async function listProviderRepositories(provider: SourceControlProvider): Promise<ProviderRepository[]> {
+  return (await api.get<ProviderRepository[]>(`/integrations/${provider}/repos`, {
+    params: { refresh: Date.now() },
+  })).data
+}
+
+export async function importProviderRepository(repository: ProviderRepository): Promise<WorkspaceBuildJob> {
+  return (await api.post<WorkspaceBuildJob>(`/integrations/${repository.provider}/repos/import`, {
+    owner: repository.owner,
+    repo: repository.name,
+  })).data
 }
 
 export async function getAccessToken(): Promise<string | null> {

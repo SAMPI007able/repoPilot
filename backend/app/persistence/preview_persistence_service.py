@@ -127,6 +127,33 @@ class PreviewPersistenceService:
             ).all()
             return [self._to_model(row) for row in rows]
 
+    def active_ids_for_user(self, owner_user_id: str) -> list[str]:
+        with self.database.session() as session:
+            return list(session.scalars(
+                select(PreviewEnvironmentRow.id)
+                .join(WorkspaceRow, WorkspaceRow.id == PreviewEnvironmentRow.workspace_id)
+                .where(
+                    WorkspaceRow.owner_user_id == owner_user_id,
+                    PreviewEnvironmentRow.status.in_([status.value for status in ACTIVE_PREVIEW_STATUSES]),
+                )
+            ).all())
+
+    def find_by_idempotency(self, workspace_id: str, idempotency_key: str) -> PreviewEnvironment | None:
+        with self.database.session() as session:
+            row = session.scalar(select(PreviewEnvironmentRow).where(
+                PreviewEnvironmentRow.workspace_id == workspace_id,
+                PreviewEnvironmentRow.idempotency_key == idempotency_key,
+            ))
+            return self._to_model(row) if row else None
+
+    def owner_user_id(self, preview_id: str) -> str | None:
+        with self.database.session() as session:
+            return session.scalar(
+                select(WorkspaceRow.owner_user_id)
+                .join(PreviewEnvironmentRow, PreviewEnvironmentRow.workspace_id == WorkspaceRow.id)
+                .where(PreviewEnvironmentRow.id == preview_id)
+            )
+
     def ids_for_workspace(self, workspace_id: str) -> list[str]:
         with self.database.session() as session:
             return list(session.scalars(

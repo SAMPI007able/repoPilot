@@ -1,5 +1,8 @@
+import json
 import os
 from typing import Protocol
+import urllib.error
+import urllib.request
 
 import jwt
 from jwt import PyJWKClient
@@ -22,11 +25,19 @@ class TokenVerifier(Protocol):
 
 class OIDCTokenVerifier:
     def __init__(self, issuer: str, audience: str, jwks_url: str) -> None:
-        self.issuer = issuer.rstrip("/")
+        self.issuer = issuer.rstrip("/") + "/"
         self.audience = audience
         self.jwks_client = PyJWKClient(jwks_url)
 
     def verify(self, token: str) -> TokenClaims:
+        if token.count(".") == 4:
+            raise AuthenticationError(
+                401,
+                "AUTH_TOKEN_AUDIENCE_REQUIRED",
+                "Auth0 issued an opaque UserInfo token. Configure VITE_OIDC_AUDIENCE to match OIDC_AUDIENCE, then sign in again.",
+            )
+        if token.count(".") != 2:
+            raise AuthenticationError(401, "AUTH_TOKEN_INVALID", "The access token format is invalid.")
         try:
             signing_key = self.jwks_client.get_signing_key_from_jwt(token)
             payload = jwt.decode(
@@ -37,9 +48,55 @@ class OIDCTokenVerifier:
                 issuer=self.issuer,
                 options={"require": ["exp", "iat", "iss", "sub"]},
             )
+            self._validate_payload(payload)
+        except AuthenticationError:
+            raise
         except Exception as exc:
             raise AuthenticationError(401, "AUTH_TOKEN_INVALID", "The access token is invalid or expired.") from exc
+
+        try:
+            profile = self._userinfo(token)
+            if profile.get("sub") != payload.get("sub"):
+                raise AuthenticationError(401, "AUTH_CLAIMS_INVALID", "The UserInfo subject does not match the access token.")
+            payload = {**profile, **payload}
+        except AuthenticationError:
+            raise
+        except Exception:
+            pass
         return _claims(payload, provider="oidc")
+
+    def _validate_payload(self, payload: dict) -> None:
+        issuer = payload.get("iss")
+        subject = payload.get("sub")
+        if not isinstance(issuer, str) or not isinstance(subject, str):
+            raise AuthenticationError(401, "AUTH_CLAIMS_INVALID", "The access token identity claims are invalid.")
+        if issuer != self.issuer:
+            raise AuthenticationError(401, "AUTH_TOKEN_INVALID", "The access token issuer is invalid.")
+        if not self._audience_matches(payload):
+            raise AuthenticationError(401, "AUTH_TOKEN_INVALID", "The access token audience is invalid.")
+
+    def _audience_matches(self, payload: dict) -> bool:
+        aud = payload.get("aud")
+        if isinstance(aud, str):
+            return aud == self.audience
+        if isinstance(aud, list):
+            return any(item == self.audience for item in aud)
+        return False
+
+    def _userinfo(self, token: str) -> dict:
+        url = f"{self.issuer}userinfo"
+        request = urllib.request.Request(
+            url,
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Accept": "application/json",
+            },
+        )
+        with urllib.request.urlopen(request, timeout=5) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+        if not isinstance(payload, dict):
+            raise AuthenticationError(401, "AUTH_CLAIMS_INVALID", "The userinfo response was invalid.")
+        return payload
 
 
 class DevelopmentTokenVerifier:

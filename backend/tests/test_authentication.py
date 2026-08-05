@@ -1,6 +1,7 @@
 import os
 import tempfile
 import unittest
+from unittest.mock import Mock, patch
 
 from fastapi.testclient import TestClient
 
@@ -9,7 +10,7 @@ from app.persistence.database import Database
 from app.persistence.identity_persistence_service import IdentityPersistenceService
 from app.persistence.artifact_store import LocalArtifactStore
 from app.persistence.workspace_persistence_service import WorkspacePersistenceService
-from app.services.authentication import DevelopmentTokenVerifier
+from app.services.authentication import DevelopmentTokenVerifier, OIDCTokenVerifier
 
 
 class AuthenticationTests(unittest.TestCase):
@@ -59,6 +60,47 @@ class AuthenticationTests(unittest.TestCase):
         self.assertEqual("developer@example.com", verifier.verify("expected").email)
         with self.assertRaises(Exception):
             verifier.verify("wrong")
+
+    def test_oidc_verifier_requires_the_configured_api_audience(self) -> None:
+        verifier = OIDCTokenVerifier(
+            issuer="https://issuer.example",
+            audience="https://api.example.com",
+            jwks_url="https://issuer.example/.well-known/jwks.json",
+        )
+
+        self.assertFalse(verifier._audience_matches({"aud": "client-id", "azp": "client-id"}))
+        self.assertTrue(verifier._audience_matches({"aud": ["https://api.example.com", "client-id"], "azp": "client-id"}))
+        self.assertFalse(verifier._audience_matches({"aud": "another-client"}))
+
+    def test_oidc_verifier_rejects_auth0_opaque_token_with_actionable_error(self) -> None:
+        verifier = OIDCTokenVerifier(
+            issuer="https://issuer.example", audience="https://api.example.com",
+            jwks_url="https://issuer.example/.well-known/jwks.json",
+        )
+        with self.assertRaises(Exception) as context:
+            verifier.verify("header..iv.ciphertext.tag")
+        self.assertEqual("AUTH_TOKEN_AUDIENCE_REQUIRED", context.exception.code)
+
+    def test_oidc_verifier_enriches_valid_jwt_from_matching_userinfo(self) -> None:
+        verifier = OIDCTokenVerifier(
+            issuer="https://issuer.example", audience="https://api.example.com",
+            jwks_url="https://issuer.example/.well-known/jwks.json",
+        )
+        verifier.jwks_client.get_signing_key_from_jwt = Mock(return_value=Mock(key="public-key"))
+        jwt_payload = {
+            "iss": "https://issuer.example/", "sub": "auth0|one",
+            "aud": "https://api.example.com", "exp": 9999999999, "iat": 1,
+        }
+        with patch("app.services.authentication.jwt.decode", return_value=jwt_payload), patch.object(
+            verifier, "_userinfo", return_value={
+                "sub": "auth0|one", "email": "user@example.com",
+                "email_verified": True, "name": "Test User",
+            },
+        ):
+            claims = verifier.verify("header.payload.signature")
+        self.assertEqual("auth0|one", claims.subject)
+        self.assertEqual("user@example.com", claims.email)
+        self.assertTrue(claims.email_verified)
 
     def test_workspace_queries_are_scoped_to_internal_owner(self) -> None:
         service = WorkspacePersistenceService(

@@ -48,8 +48,10 @@ class WorkspaceBuildService:
         git_url: str,
         documents: list[tuple[str, bytes]] | None = None,
         owner_user_id: str | None = None,
+        clone_authorization: str | None = None,
+        trusted_provider_url: bool = False,
     ) -> WorkspaceBuildJob:
-        git_url = self.repository_service.validate_public_repository_url(git_url)
+        git_url = git_url.strip() if trusted_provider_url else self.repository_service.validate_public_repository_url(git_url)
         repository_name = self.repository_service.extract_repo_name(git_url)
         if not repository_name:
             raise ValueError("Could not determine a repository name from githubUrl.")
@@ -78,6 +80,7 @@ class WorkspaceBuildService:
                 git_url,
                 repository_name,
                 documents or [],
+                clone_authorization,
             )
             return job.model_copy(deep=True)
 
@@ -114,6 +117,7 @@ class WorkspaceBuildService:
         git_url: str,
         repository_name: str,
         documents: list[tuple[str, bytes]],
+        clone_authorization: str | None,
     ) -> None:
         workspace_id = self._jobs[job_id].workspaceId
         temporary_root: str | None = None
@@ -124,7 +128,10 @@ class WorkspaceBuildService:
             temporary_root = tempfile.mkdtemp(prefix=f"{job_id}-", dir=self.workspace_dir)
             destination_path = os.path.join(temporary_root, "repository")
             self._update_stage(job_id, "clone", "running")
-            self.repository_service.clone_repository(git_url, destination_path)
+            if clone_authorization:
+                self.repository_service.clone_repository(git_url, destination_path, clone_authorization)
+            else:
+                self.repository_service.clone_repository(git_url, destination_path)
             uploaded_docs = self._save_project_documents(destination_path, documents)
             commit_sha = self.repository_service.get_commit_sha(destination_path)
             self._update_stage(job_id, "clone", "completed")

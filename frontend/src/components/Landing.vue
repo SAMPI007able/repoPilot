@@ -7,22 +7,23 @@ import {
   GitCompare,
   MessageSquareText,
   Network,
+  FolderGit2,
+  ArrowRight,
   ShieldCheck,
 } from '@lucide/vue'
-import RepositoryConnections from './RepositoryConnections.vue'
 
 defineProps<{
   repoUrl: string
   docs: File[]
   busy: boolean
   error: string | null
-  authenticated: boolean
 }>()
 
 const emit = defineEmits<{
   (e: 'update:repoUrl', value: string): void
   (e: 'update:docs', value: File[]): void
   (e: 'create'): void
+  (e: 'browse-repositories'): void
 }>()
 
 const suggested = [
@@ -32,7 +33,7 @@ const suggested = [
 
 const cards = [
   { icon: Network, title: 'Build the workspace', body: 'Indexing, graph construction, and repository statistics — the foundation every later answer draws from.' },
-  { icon: MessageSquareText, title: 'Ask the codebase', body: '"Explain the payment flow." TestForge walks the dependency graph and answers in plain English.' },
+  { icon: MessageSquareText, title: 'Ask the codebase', body: '"Explain the payment flow." RepoPilot walks the dependency graph and answers in plain English.' },
   { icon: FlaskConical, title: 'Generate integration tests', body: '"A customer retries payment after a timeout." Scenario-driven tests wired to the real modules they exercise.' },
   { icon: AlertTriangle, title: 'Code-quality insights', body: 'Highly coupled services, god functions, duplicated retry logic — with an explanation of why it matters.' },
   { icon: GitCompare, title: 'Impact analysis', body: 'Modify a file and see impacted components plus the recommended tests to rerun.' },
@@ -43,10 +44,10 @@ const cards = [
 <template>
   <div class="landing">
     <section class="landing__hero">
-      <div class="landing__badge">Understand. Answer. Test.</div>
-      <h1 class="landing__title">TestForge <span>AI</span></h1>
+      <div class="landing__badge">Understand, run and validate any codebase</div>
+      <h1 class="landing__title">Repo<span>Pilot</span></h1>
       <p class="landing__copy">
-        Paste a repository and TestForge indexes the codebase, builds a dependency graph, answers engineering
+        Paste a repository and RepoPilot indexes the codebase, builds a dependency graph, answers engineering
         questions, surfaces code-quality insights, and generates context-aware integration tests.
       </p>
 
@@ -110,10 +111,14 @@ const cards = [
         <p v-if="error" class="error-text">{{ error }}</p>
       </div>
 
-      <RepositoryConnections v-if="authenticated" />
-      <p v-else class="landing__footnote">
-        Sign in when you are ready to build, or connect a source-control provider to browse private repositories.
-      </p>
+      <button class="repository-callout" type="button" @click="emit('browse-repositories')">
+        <span class="repository-callout__icon"><FolderGit2 aria-hidden="true" /></span>
+        <span class="repository-callout__copy">
+          <strong>Browse your repositories</strong>
+          <span>Connect GitHub, GitLab, or Bitbucket — or upload a local zip — and build a workspace from any repo.</span>
+        </span>
+        <ArrowRight class="repository-callout__arrow" aria-hidden="true" />
+      </button>
     </section>
 
     <section class="landing__cards">

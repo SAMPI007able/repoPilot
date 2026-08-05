@@ -31,7 +31,7 @@ const emit = defineEmits<{
       <div v-if="!result && !busy" class="ask-panel__empty">
         <Sparkles :size="20" class="ask-panel__empty-icon" />
         <p>Ask anything about {{ workspaceName }}.</p>
-        <span>TestForge walks the dependency graph to answer.</span>
+        <span>RepoPilot walks the dependency graph to answer.</span>
       </div>
       <div v-else-if="busy" class="ask-panel__empty">
         <p>Processing...</p>

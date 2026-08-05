@@ -31,7 +31,7 @@ const projectDocumentNames = computed(() => props.projectDocuments.map((file) =>
       <p class="eyebrow">Page 1</p>
       <h2 class="section-title">Workspace</h2>
       <p class="muted">
-        Point TestForge AI at a GitHub repository and let it build a repository-aware workspace.
+        Point RepoPilot at a GitHub repository and let it build a repository-aware workspace.
       </p>
     </div>
 

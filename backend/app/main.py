@@ -1,13 +1,14 @@
-from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Body, Request, Header, Depends
+from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Body, Request, Header, Depends, Response
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse, RedirectResponse
 from pydantic import BaseModel
 from typing import Literal, Optional
 import os
 import uuid
 import asyncio
 import json
+import hashlib
 
 from app.models.code_models import (
     ImpactAnalysisResult,
@@ -42,6 +43,10 @@ from app.models.preview_models import (
     PreviewStatus,
 )
 from app.models.identity_models import CurrentUserResponse, Principal
+from app.models.integration_models import (
+    ImportRepositoryRequest, OAuthConnectResponse, ProviderConnection,
+    ProviderRepository, RepositoryContent,
+)
 from app.persistence.identity_persistence_service import IdentityPersistenceService
 from app.services.auth_dependencies import AuthenticationDependencies
 from app.services.authentication import AuthenticationError, create_token_verifier
@@ -70,6 +75,17 @@ from app.services.workspace_build_service import (
     WorkspaceBuildAlreadyRunningError,
     WorkspaceBuildService,
 )
+from app.persistence.oauth_persistence_service import OAuthPersistenceService
+from app.persistence.feature_flag_persistence_service import (
+    FeatureFlagNotFoundError,
+    FeatureFlagPersistenceService,
+)
+from app.models.feature_flag_models import (
+    FeatureFlagRecord,
+    FeatureFlagsResponse,
+    FeatureFlagUpdateRequest,
+)
+from app.services.oauth_integrations import IntegrationError, OAuthIntegrationService
 from app.services.runtime_manifest_analyzer import (
     DeterministicRuntimeManifestAnalyzer,
     StructuredAIRuntimeManifestFallback,
@@ -83,10 +99,15 @@ from app.services.runtime_manifest_service import (
 from app.services.preview_logs import PreviewLogService
 from app.services.preview_queue import PreviewQueueUnavailableError, RQPreviewJobQueue
 from app.services.preview_service import PreviewEnvironmentValidationError, PreviewService
+from app.config.rate_limit_settings import RateLimitSettings
+from app.services.rate_limit_guard import QuotaAPIError, RateLimitDecision, RateLimitGuard
+from app.services.rate_limit_service import RateLimitBackendUnavailable, RateLimitService
+from app.services.telemetry import Telemetry
 
 from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI(title="TestForge AI")
+telemetry = Telemetry()
 
 
 class PreviewLabAPIError(RuntimeError):
@@ -115,6 +136,7 @@ async def attach_correlation_id(request: Request, call_next):
     request.state.correlation_id = request.headers.get("X-Correlation-ID") or str(uuid.uuid4())
     response = await call_next(request)
     response.headers["X-Correlation-ID"] = request.state.correlation_id
+    response.headers.setdefault("Cache-Control", "no-store")
     return response
 
 
@@ -144,6 +166,19 @@ async def handle_authentication_error(request: Request, exc: AuthenticationError
         status_code=exc.status_code,
         content=envelope.model_dump(mode="json", by_alias=True),
         headers=headers,
+    )
+
+
+@app.exception_handler(QuotaAPIError)
+async def handle_quota_error(request: Request, exc: QuotaAPIError):
+    envelope = PreviewErrorEnvelope(
+        code=exc.code, message=exc.message, retryable=True,
+        details=exc.details, correlationId=_correlation_id(request),
+    )
+    return JSONResponse(
+        status_code=exc.status_code,
+        content=envelope.model_dump(mode="json", by_alias=True),
+        headers=exc.headers,
     )
 
 
@@ -198,7 +233,11 @@ os.makedirs(WORKSPACE_DIR, exist_ok=True)
 default_database_path = os.path.join(PERSISTENCE_DIR, "testforge.db").replace("\\", "/")
 database = Database(os.getenv("DATABASE_URL", f"sqlite:///{default_database_path}"))
 database.create_schema()
+feature_flag_service = FeatureFlagPersistenceService(database)
+feature_flag_service.ensure_defaults()
 identity_persistence_service = IdentityPersistenceService(database)
+oauth_persistence_service = OAuthPersistenceService(database)
+oauth_integration_service = OAuthIntegrationService(oauth_persistence_service)
 auth = AuthenticationDependencies(identity_persistence_service, create_token_verifier())
 artifact_store = create_artifact_store(os.path.join(PERSISTENCE_DIR, "artifacts"))
 workspace_persistence_service = WorkspacePersistenceService(database, artifact_store)
@@ -221,6 +260,9 @@ preview_service = PreviewService(
     RQPreviewJobQueue(),
     PreviewLogService(artifact_store),
 )
+rate_limit_settings = RateLimitSettings.from_env()
+rate_limit_service = RateLimitService(rate_limit_settings)
+rate_limit_guard = RateLimitGuard(rate_limit_service, rate_limit_settings)
 workspace_persistence_service.mark_interrupted_builds_failed()
 workspace_build_service = WorkspaceBuildService(
     repo_service,
@@ -320,19 +362,131 @@ def _authorize_preview(preview_id: str, principal: Principal) -> None:
         raise PreviewLabAPIError(404, "PREVIEW_NOT_FOUND", "The preview was not found.")
 
 
+def _require_feature(key: str) -> None:
+    if not feature_flag_service.is_enabled(key):
+        raise PreviewLabAPIError(
+            503,
+            "FEATURE_DISABLED",
+            f"The '{key}' feature is currently disabled.",
+            details={"feature": key},
+        )
+
+
+def _apply_rate_headers(response: Response, decision: RateLimitDecision) -> None:
+    for name, value in decision.headers.items():
+        response.headers[name] = value
+
+
+def _preview_reservation_id(workspace_id: str, idempotency_key: str) -> str:
+    value = f"{workspace_id}:{idempotency_key}".encode("utf-8")
+    return f"reservation:{hashlib.sha256(value).hexdigest()[:32]}"
+
+
 # ── Routes ───────────────────────────────────────────────────────────────────
 @app.get("/health")
 def health():
     return {"status": "ok"}
 
 
+@app.get("/feature-flags", response_model=FeatureFlagsResponse)
+def get_feature_flags():
+    return FeatureFlagsResponse(flags=feature_flag_service.client_flags())
+
+
 @app.get("/me", response_model=CurrentUserResponse)
 def get_me(principal: Principal = Depends(auth.principal)):
-    return identity_persistence_service.current_user(principal.user_id)
+    user = identity_persistence_service.current_user(principal.user_id)
+    telemetry.identify(principal.user_id, {
+        "email": user.primary_email,
+        "display_name": user.display_name
+    })
+    telemetry.capture(principal.user_id, "user_registered", {"source": "backend_me"})
+    return user
+
+
+@app.get("/integrations", response_model=list[ProviderConnection])
+def list_integrations(principal: Principal = Depends(auth.active_principal)):
+    return oauth_integration_service.statuses(principal.user_id)
+
+
+@app.get("/integrations/{provider}/connect", response_model=OAuthConnectResponse)
+def connect_integration(provider: str, principal: Principal = Depends(auth.active_principal)):
+    try:
+        return OAuthConnectResponse(authorizationUrl=oauth_integration_service.authorization_url(provider, principal.user_id))
+    except IntegrationError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+
+
+@app.get("/integrations/{provider}/callback")
+def integration_callback(provider: str, code: str | None = None, state: str | None = None, error: str | None = None):
+    if error:
+        return RedirectResponse(f"{oauth_integration_service.frontend_url}/repositories?integration={provider}&status=denied")
+    if not code or not state:
+        raise HTTPException(status_code=400, detail="OAuth callback code and state are required.")
+    try:
+        return RedirectResponse(oauth_integration_service.complete_callback(provider, code, state), status_code=303)
+    except IntegrationError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+
+
+@app.delete("/integrations/{provider}", status_code=204)
+def disconnect_integration(provider: str, principal: Principal = Depends(auth.active_principal)):
+    oauth_integration_service.disconnect(principal.user_id, provider)
+    return Response(status_code=204)
+
+
+@app.get("/integrations/{provider}/repos", response_model=list[ProviderRepository])
+def list_integration_repositories(provider: str, principal: Principal = Depends(auth.active_principal)):
+    try:
+        return oauth_integration_service.repositories(principal.user_id, provider)
+    except IntegrationError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+
+
+@app.get("/integrations/{provider}/repos/{owner}/{repo}/contents/{path:path}", response_model=RepositoryContent)
+def get_integration_repository_content(provider: str, owner: str, repo: str, path: str, ref: str | None = None, principal: Principal = Depends(auth.active_principal)):
+    try:
+        return oauth_integration_service.content(principal.user_id, provider, owner, repo, path, ref)
+    except IntegrationError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+
+
+@app.post("/integrations/{provider}/repos/import", response_model=WorkspaceBuildJob, status_code=202)
+def import_integration_repository(
+    provider: str, payload: ImportRepositoryRequest, response: Response,
+    principal: Principal = Depends(auth.active_principal),
+):
+    try:
+        repository = oauth_integration_service.repository(principal.user_id, provider, payload.owner, payload.repo)
+        token = oauth_integration_service.access_token(principal.user_id, provider)
+        _apply_rate_headers(response, rate_limit_guard.enforce(principal, "repository_index"))
+        telemetry.capture(principal.user_id, "repo_connected", {
+            "source": "integration_import",
+            "provider": provider,
+            "repository_url": repository.clone_url,
+            "repository_owner": payload.owner,
+            "repository_name": payload.repo,
+        })
+        workspace = workspace_build_service.start_build(
+            repository.clone_url, owner_user_id=principal.user_id,
+            clone_authorization=token, trusted_provider_url=True,
+        )
+        telemetry.capture(principal.user_id, "repo_indexed", {
+            "source": "integration_import",
+            "workspace_id": workspace.workspaceId,
+            "provider": provider,
+            "repository_url": repository.clone_url,
+            "repository_owner": payload.owner,
+            "repository_name": payload.repo,
+        })
+        return workspace
+    except IntegrationError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
 
 
 @app.post("/workspaces/index", response_model=WorkspaceBuildJob, status_code=202)
 def index_workspace(
+    response: Response,
     githubUrl: str | None = Form(None),
     project_docs: list[UploadFile] | None = File(default=None),
     payload: IndexRequest | None = Body(None),
@@ -343,13 +497,27 @@ def index_workspace(
         raise HTTPException(status_code=400, detail="githubUrl is required")
 
     try:
+        if project_docs:
+            _apply_rate_headers(response, rate_limit_guard.enforce(principal, "document_upload"))
+        _apply_rate_headers(response, rate_limit_guard.enforce(principal, "repository_index"))
         documents = [
             (upload.filename or "project-document", upload.file.read())
             for upload in (project_docs or [])
         ]
-        return workspace_build_service.start_build(
+        if project_docs:
+            telemetry.capture(principal.user_id, "document_uploaded", {
+                "source": "workspace_index",
+                "repository_url": git_url,
+                "document_count": len(project_docs),
+            })
+        workspace = workspace_build_service.start_build(
             git_url, documents, owner_user_id=principal.user_id
         )
+        telemetry.capture(principal.user_id, "repo_connected", {"source": "workspace_index", "repository_url": git_url})
+        telemetry.capture(principal.user_id, "repo_indexed", {"source": "workspace_index", "workspace_id": workspace.workspaceId})
+        return workspace
+    except QuotaAPIError:
+        raise
     except WorkspaceBuildAlreadyRunningError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except Exception as e:
@@ -509,13 +677,58 @@ def approve_runtime_manifest(
 def create_preview(
     workspace_id: str,
     payload: PreviewCreateRequest,
+    response: Response,
     idempotency_key: str = Header(alias="Idempotency-Key"),
     principal: Principal = Depends(auth.active_principal),
 ):
     _authorize_workspace(workspace_id, principal)
+    _require_feature("preview")
+    if not idempotency_key or len(idempotency_key) > 128:
+        raise PreviewLabAPIError(
+            422, "PREVIEW_ENVIRONMENT_INVALID", "The preview environment is invalid.",
+            details={"violations": ["Idempotency-Key must contain 1 to 128 characters."]},
+        )
+    existing = preview_persistence_service.find_by_idempotency(workspace_id, idempotency_key)
+    if existing is not None:
+        return existing
     try:
-        return preview_service.create(workspace_id, idempotency_key, payload)
+        rate_limit_service.reconcile_concurrency(
+            principal.user_id, "preview", preview_persistence_service.active_ids_for_user(principal.user_id),
+        )
+    except RateLimitBackendUnavailable as exc:
+        raise QuotaAPIError(
+            503, "RATE_LIMIT_UNAVAILABLE", "The resource quota service is temporarily unavailable.",
+            {"resource": "preview"}, {"Retry-After": "30"},
+        ) from exc
+    decision = rate_limit_guard.enforce(principal, "preview_creation", fail_closed=True)
+    _apply_rate_headers(response, decision)
+    reservation_id = _preview_reservation_id(workspace_id, idempotency_key)
+    rate_limit_guard.acquire(principal, "preview", reservation_id)
+    try:
+        preview = preview_service.create(workspace_id, idempotency_key, payload)
+        try:
+            rate_limit_service.replace_concurrency_slot(
+                principal.user_id, "preview", reservation_id, preview.id,
+            )
+            telemetry.capture(principal.user_id, "preview_started", {
+                "workspace_id": workspace_id,
+                "preview_id": preview.id,
+                "environment_count": len(payload.environment or {}),
+            })
+        except RateLimitBackendUnavailable:
+            # The reservation still counts this preview; the next create request reconciles exact IDs.
+            pass
+        return preview
     except Exception as exc:
+        try:
+            rate_limit_service.release_concurrency_slot(principal.user_id, "preview", reservation_id)
+        except RateLimitBackendUnavailable:
+            pass
+        telemetry.capture(principal.user_id, "preview_failed", {
+            "workspace_id": workspace_id,
+            "idempotency_key": idempotency_key,
+            "error": str(exc),
+        })
         _raise_preview_error(exc)
 
 
@@ -585,7 +798,13 @@ def stop_preview(
     del idempotency_key
     _authorize_preview(preview_id, principal)
     try:
-        return preview_service.stop(preview_id)
+        preview = preview_service.stop(preview_id)
+        try:
+            rate_limit_service.release_concurrency_slot(principal.user_id, "preview", preview_id)
+            telemetry.capture(principal.user_id, "preview_completed", {"preview_id": preview_id, "status": preview.status.value})
+        except RateLimitBackendUnavailable:
+            pass
+        return preview
     except Exception as exc:
         _raise_preview_error(exc)
 
@@ -594,13 +813,20 @@ def stop_preview(
 def extend_preview(
     preview_id: str,
     payload: PreviewExtendRequest,
+    response: Response,
     idempotency_key: str = Header(alias="Idempotency-Key"),
     principal: Principal = Depends(auth.active_principal),
 ):
     del idempotency_key
     _authorize_preview(preview_id, principal)
+    _require_feature("preview")
     try:
-        return preview_service.extend(preview_id, payload)
+        _apply_rate_headers(response, rate_limit_guard.enforce(principal, "preview_extension", fail_closed=True))
+        preview = preview_service.extend(preview_id, payload)
+        telemetry.capture(principal.user_id, "preview_started", {"preview_id": preview_id, "extended": True})
+        return preview
+    except QuotaAPIError:
+        raise
     except Exception as exc:
         _raise_preview_error(exc)
 
@@ -630,7 +856,7 @@ def delete_workspace(workspace_id: str, principal: Principal = Depends(auth.acti
 
 
 @app.post("/ai/query", response_model=QueryResponse)
-def ai_query(payload: QueryRequest, principal: Principal = Depends(auth.active_principal)):
+def ai_query(payload: QueryRequest, response: Response, principal: Principal = Depends(auth.active_principal)):
     """
     Unified AI query endpoint.
 
@@ -645,7 +871,12 @@ def ai_query(payload: QueryRequest, principal: Principal = Depends(auth.active_p
             if not payload.query:
                 raise HTTPException(status_code=400, detail="query is required for type=chat")
 
+            _apply_rate_headers(response, rate_limit_guard.enforce(principal, "project_chat"))
             prompt, markdown = ai_service.chat(repository_metadata, payload.query)
+            telemetry.capture(principal.user_id, "chat_message", {
+                "workspace_id": payload.workspaceId,
+                "query_length": len(payload.query or ""),
+            })
             return QueryResponse(
                 type="chat",
                 workspaceId=payload.workspaceId,
@@ -661,22 +892,30 @@ def ai_query(payload: QueryRequest, principal: Principal = Depends(auth.active_p
                         status_code=400,
                         detail="scenario is required for scenario test generation",
                     )
-                prompt, markdown = ai_service.generate_tests_from_scenario(
-                    repository_metadata,
-                    payload.scenario.strip(),
-                    test_type,
-                )
             else:
                 if not payload.target:
                     raise HTTPException(
                         status_code=400,
                         detail="target is required for file test generation",
                     )
-                prompt, markdown = ai_service.generate_tests(
-                    repository_metadata,
-                    payload.target,
-                    test_type,
+            _apply_rate_headers(response, rate_limit_guard.enforce(principal, "ai_generation"))
+            if payload.generationMode == "scenario":
+                telemetry.capture(principal.user_id, "scenario_generation", {
+                    "workspace_id": payload.workspaceId,
+                    "test_type": test_type,
+                })
+                prompt, markdown = ai_service.generate_tests_from_scenario(
+                    repository_metadata, payload.scenario.strip(), test_type,
                 )
+            else:
+                prompt, markdown = ai_service.generate_tests(
+                    repository_metadata, payload.target, test_type,
+                )
+                telemetry.capture(principal.user_id, "test_generation", {
+                    "workspace_id": payload.workspaceId,
+                    "target": payload.target or "",
+                    "test_type": test_type,
+                })
 
             return QueryResponse(
                 type="test_generation",
@@ -690,7 +929,7 @@ def ai_query(payload: QueryRequest, principal: Principal = Depends(auth.active_p
         else:
             raise HTTPException(status_code=400, detail=f"Unsupported query type: {payload.type}")
 
-    except HTTPException:
+    except (HTTPException, QuotaAPIError):
         raise
     except AIProviderUnavailableError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
@@ -701,10 +940,11 @@ def ai_query(payload: QueryRequest, principal: Principal = Depends(auth.active_p
 
 
 @app.post("/ai/generate-tests", response_model=GenerateTestsResponse, deprecated=True)
-def generate_tests(payload: GenerateTestsRequest, principal: Principal = Depends(auth.active_principal)):
+def generate_tests(payload: GenerateTestsRequest, response: Response, principal: Principal = Depends(auth.active_principal)):
     """Deprecated — use POST /ai/query with type=test_generation instead."""
     try:
         _, repository_metadata = _load_workspace(payload.workspaceId, principal)
+        _apply_rate_headers(response, rate_limit_guard.enforce(principal, "ai_generation"))
         prompt, markdown = ai_service.generate_tests(repository_metadata, payload.target, payload.type)
 
         return GenerateTestsResponse(
@@ -714,7 +954,7 @@ def generate_tests(payload: GenerateTestsRequest, principal: Principal = Depends
             prompt=prompt,
             markdown=markdown,
         )
-    except HTTPException:
+    except (HTTPException, QuotaAPIError):
         raise
     except AIProviderUnavailableError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
@@ -735,3 +975,41 @@ def impact_analysis(payload: ImpactAnalysisRequest, principal: Principal = Depen
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Impact analysis failed: {str(exc)}") from exc
+
+
+@app.delete("/admin/rate-limits/{user_id}")
+def clear_user_rate_limits(
+    user_id: str,
+    principal: Principal = Depends(auth.admin_principal),
+):
+    del principal
+    try:
+        result = rate_limit_service.clear_user(user_id)
+        return {
+            "userId": user_id,
+            "requestKeysRemoved": result.request_keys_removed,
+            "concurrencyEntriesRemoved": result.concurrency_entries_removed,
+        }
+    except RateLimitBackendUnavailable as exc:
+        raise QuotaAPIError(
+            503, "RATE_LIMIT_UNAVAILABLE", "The quota service is temporarily unavailable.",
+            {}, {"Retry-After": "30"},
+        ) from exc
+
+
+@app.get("/admin/feature-flags", response_model=list[FeatureFlagRecord])
+def list_feature_flags(principal: Principal = Depends(auth.admin_principal)):
+    del principal
+    return feature_flag_service.list_flags()
+
+
+@app.put("/admin/feature-flags/{key}", response_model=FeatureFlagRecord)
+def update_feature_flag(
+    key: str,
+    payload: FeatureFlagUpdateRequest,
+    principal: Principal = Depends(auth.admin_principal),
+):
+    try:
+        return feature_flag_service.update(key, payload.enabled, principal.user_id)
+    except FeatureFlagNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=f"Feature flag '{key}' was not found.") from exc
