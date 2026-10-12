@@ -27,7 +27,7 @@ Rejected requests use the standard error envelope and HTTP 429. Request quotas i
 
 ## Configuration
 
-All variables and defaults are listed in `backend/.env.example`. Windows may be customized per action with `<LIMIT_VARIABLE>_WINDOW_SECONDS`; otherwise `RATE_LIMIT_WINDOW_SECONDS` is used. `RATE_LIMIT_ENABLED=false` is rejected unless `APP_ENV` is `development`, `local`, or `test`.
+All variables and defaults are listed in the repository-root `.env.example`. Windows may be customized per action with `<LIMIT_VARIABLE>_WINDOW_SECONDS`; otherwise `RATE_LIMIT_WINDOW_SECONDS` is used. `RATE_LIMIT_ENABLED=false` is rejected unless `APP_ENV` is `development`, `local`, or `test`.
 
 ## Administrator reset
 

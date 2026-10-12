@@ -48,7 +48,7 @@ BITBUCKET_OAUTH_CLIENT_ID=
 BITBUCKET_OAUTH_CLIENT_SECRET=
 ```
 
-For local Uvicorn and Docker Compose, place these backend-only values in `backend/.env`. Compose loads that file for the API, preview worker, and reconciler without baking the credentials into an image. Keep the repository-root `.env` for Compose interpolation and frontend build variables.
+For local Uvicorn and Docker Compose, place these values in the repository-root `.env` described by [the deployment environment guide](DEPLOYMENT_ENVIRONMENT.md). `backend/.env` remains a temporary Compose compatibility fallback only; root values take precedence.
 
 ## 3. Start and verify
 

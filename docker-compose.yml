@@ -2,11 +2,11 @@ services:
   postgres:
     image: postgres:17-alpine
     environment:
-      POSTGRES_DB: testforge
-      POSTGRES_USER: testforge
-      POSTGRES_PASSWORD: testforge-local
+      POSTGRES_DB: ${POSTGRES_DB:-testforge}
+      POSTGRES_USER: ${POSTGRES_USER:-testforge}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-testforge-local}
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U testforge"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-testforge} -d ${POSTGRES_DB:-testforge}"]
       interval: 3s
       timeout: 3s
       retries: 20
@@ -16,8 +16,8 @@ services:
   pgadmin:
     image: dpage/pgadmin4:9
     environment:
-      PGADMIN_DEFAULT_EMAIL: admin@testforge-local.com
-      PGADMIN_DEFAULT_PASSWORD: testforge-local
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_DEFAULT_EMAIL:-admin@testforge-local.com}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_DEFAULT_PASSWORD:-testforge-local}
     depends_on:
       postgres:
         condition: service_healthy
@@ -40,11 +40,11 @@ services:
   db-migrate:
     image: postgres:17-alpine
     environment:
-      PGPASSWORD: testforge-local
+      PGPASSWORD: ${POSTGRES_PASSWORD:-testforge-local}
     command:
       - sh
       - -ec
-      - 'for migration in /migrations/[0-9][0-9][0-9]_*.sql; do case "$$migration" in *.down.sql) continue;; esac; psql -h postgres -U testforge -d testforge -v ON_ERROR_STOP=1 -f "$$migration"; done'
+      - 'for migration in /migrations/[0-9][0-9][0-9]_*.sql; do case "$$migration" in *.down.sql) continue;; esac; psql -h postgres -U "${POSTGRES_USER:-testforge}" -d "${POSTGRES_DB:-testforge}" -v ON_ERROR_STOP=1 -f "$$migration"; done'
     depends_on:
       postgres:
         condition: service_healthy
@@ -63,9 +63,12 @@ services:
   api:
     build: ./backend
     env_file:
-      - ./backend/.env
+      - path: ./backend/.env
+        required: false
+      - path: ./.env
+        required: true
     environment: &backend-environment
-      DATABASE_URL: postgresql://testforge:testforge-local@postgres:5432/testforge
+      DATABASE_URL: postgresql://${POSTGRES_USER:-testforge}:${POSTGRES_PASSWORD:-testforge-local}@postgres:5432/${POSTGRES_DB:-testforge}
       REDIS_URL: redis://redis:6379/0
       ARTIFACT_STORE: local
       ARTIFACT_LOCAL_ROOT: /app/workspace/artifacts
@@ -99,7 +102,10 @@ services:
     build: ./backend
     command: ["sh", "-c", "umask 0002 && exec rq worker previews --url redis://redis:6379/0"]
     env_file:
-      - ./backend/.env
+      - path: ./backend/.env
+        required: false
+      - path: ./.env
+        required: true
     environment: *backend-environment
     user: root
     group_add:
@@ -117,7 +123,10 @@ services:
     build: ./backend
     command: ["python", "-m", "app.workers.preview_reconciler"]
     env_file:
-      - ./backend/.env
+      - path: ./backend/.env
+        required: false
+      - path: ./.env
+        required: true
     environment: *backend-environment
     depends_on:
       api:
@@ -141,6 +150,8 @@ services:
         VITE_OIDC_GITHUB_CONNECTION: ${VITE_OIDC_GITHUB_CONNECTION:-github}
         VITE_OIDC_GOOGLE_CONNECTION: ${VITE_OIDC_GOOGLE_CONNECTION:-google-oauth2}
         VITE_OIDC_EMAIL_CONNECTION: ${VITE_OIDC_EMAIL_CONNECTION:-Username-Password-Authentication}
+        VITE_POSTHOG_API_KEY: ${VITE_POSTHOG_API_KEY:-}
+        VITE_POSTHOG_HOST: ${VITE_POSTHOG_HOST:-https://us.i.posthog.com}
     depends_on:
       api:
         condition: service_healthy

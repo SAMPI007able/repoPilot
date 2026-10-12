@@ -28,14 +28,15 @@ Prerequisites:
 
 Backend
 
-Create a virtual environment, install dependencies, and run the API from the repository root:
+Create a root `.env` from the canonical template, then create a virtual environment, install dependencies, and run the API from the repository root:
 
 ```powershell
+Copy-Item .env.example .env
 python -m venv .venv
 .venv\Scripts\Activate.ps1
 pip install -r backend/requirements.txt
 $env:PYTHONPATH="backend"
-uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
+uvicorn app.main:app --env-file .env --reload --host 127.0.0.1 --port 8000
 ```
 
 Key endpoints:
@@ -76,7 +77,7 @@ See the [Phase 0 architecture assessment](docs/realtime-preview/phase-0-assessme
 
 > **Security warning:** ordinary Docker isolation is not sufficient for arbitrary hostile public repositories in production. Production execution is intentionally deferred until the Kubernetes/gVisor, network-policy, identity, routing, quota, and reconciliation controls described in Phase 3 exist.
 
-Local development uses SQLite and local compressed artifacts by default. For cloud deployment, set `DATABASE_URL` to PostgreSQL and configure S3-compatible object storage using [backend/.env.example](backend/.env.example). `WORKSPACE_BUILD_JOBS` controls concurrent repository builds, while `WORKSPACE_PARSE_WORKERS` controls parser batches within each build.
+Local development uses SQLite and local compressed artifacts by default. The canonical variable list is [`.env.example`](.env.example); the [deployment environment guide](docs/DEPLOYMENT_ENVIRONMENT.md) maps it to Vercel, Railway/Fly, Neon, Upstash, AWS S3, PostHog, and Auth0. `WORKSPACE_BUILD_JOBS` controls concurrent repository builds, while `WORKSPACE_PARSE_WORKERS` controls parser batches within each build.
 
 Legacy checkout migration
 
@@ -110,6 +111,7 @@ Trusted local preview stack
 With Docker Desktop running, start PostgreSQL, pgAdmin, Redis, the API, RQ worker, expiry reconciler, and frontend together:
 
 ```powershell
+Copy-Item .env.example .env # first run only; then fill in required credentials
 docker compose up --build
 ```
 

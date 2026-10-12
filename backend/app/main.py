@@ -209,8 +209,11 @@ async def handle_request_validation(request: Request, exc: RequestValidationErro
     )
 
 origins = [
-    "http://localhost:5173",
-    "http://127.0.0.1:5173",
+    origin.strip().rstrip("/")
+    for origin in os.getenv(
+        "CORS_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173"
+    ).split(",")
+    if origin.strip()
 ]
 app.add_middleware(
     CORSMiddleware,

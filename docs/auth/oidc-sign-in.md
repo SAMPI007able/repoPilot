@@ -46,13 +46,13 @@ If your tenant uses different connection names, update the frontend values accor
 
 ## 4. Configure backend environment variables
 
-Copy the backend example file and fill in your provider values:
+Copy the canonical environment file and fill in your provider values:
 
 ```powershell
-copy backend\.env.example backend\.env
+copy .env.example .env
 ```
 
-Set these values in backend/.env:
+Set these values in the repository-root `.env`:
 
 ```env
 AUTH_MODE=oidc
@@ -69,13 +69,13 @@ Notes:
 
 ## 5. Configure frontend environment variables
 
-Copy the frontend example file and fill in your provider values:
+The frontend reads the same repository-root `.env` during local development:
 
 ```powershell
-copy frontend\.env.example frontend\.env
+copy .env.example .env
 ```
 
-Set these values in frontend/.env:
+Set these values in the repository-root `.env`:
 
 ```env
 VITE_API_BASE_URL=http://127.0.0.1:8000
