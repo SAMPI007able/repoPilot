@@ -9,6 +9,8 @@ from app.persistence.models import FeatureFlagRow
 
 FEATURE_FLAG_DEFAULTS: dict[str, tuple[bool, str]] = {
     "preview": (False, "Show and allow creation of realtime preview environments."),
+    "ai_generation": (True, "Allow AI chat and test generation requests."),
+    "uploads": (True, "Allow project document uploads."),
     "code_quality": (False, "Show code-quality insights in a workspace."),
 }
 

@@ -122,11 +122,12 @@ const insightItems = [] as Array<{ title: string; path: string; severity: string
       :workspace-name="workspace.repoName"
       :input="generationStore.genericQuery"
       :busy="generationStore.busy"
-      :result="generationStore.result"
+      :messages="generationStore.chatMessages"
       :suggested="generationStore.suggestedQuestions"
       :error="generationStore.error"
       @update:input="generationStore.setGenericQuery"
       @submit="generationStore.runQuery"
+      @new-chat="generationStore.startNewChat"
     />
 
     <TestGenPanel

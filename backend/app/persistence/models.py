@@ -36,6 +36,9 @@ class UserRow(Base):
     oauth_connections: Mapped[list["OAuthConnectionRow"]] = relationship(
         back_populates="user", cascade="all, delete-orphan"
     )
+    chat_sessions: Mapped[list["ChatSessionRow"]] = relationship(
+        back_populates="user", cascade="all, delete-orphan"
+    )
 
 
 class AuthIdentityRow(Base):
@@ -136,6 +139,9 @@ class WorkspaceRow(Base):
         uselist=False,
     )
     previews: Mapped[list["PreviewEnvironmentRow"]] = relationship(
+        back_populates="workspace", cascade="all, delete-orphan"
+    )
+    chat_sessions: Mapped[list["ChatSessionRow"]] = relationship(
         back_populates="workspace", cascade="all, delete-orphan"
     )
     owner: Mapped[UserRow | None] = relationship(back_populates="workspaces")
@@ -259,3 +265,79 @@ class PreviewEventRow(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now, index=True)
 
     preview: Mapped[PreviewEnvironmentRow] = relationship(back_populates="events")
+
+
+class BrowserSessionRow(Base):
+    __tablename__ = "browser_sessions"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    user_id: Mapped[str | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    status: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    provider: Mapped[str] = mapped_column(String(64), nullable=False, default="browser")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now, onupdate=utc_now)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    terminated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class UsageEventRow(Base):
+    __tablename__ = "usage_events"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    user_id: Mapped[str | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    category: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    quantity: Mapped[int] = mapped_column(BigInteger, nullable=False, default=1)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now, index=True)
+
+
+class AdminLogRow(Base):
+    __tablename__ = "admin_logs"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    category: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    severity: Mapped[str] = mapped_column(String(16), nullable=False, default="error", index=True)
+    code: Mapped[str | None] = mapped_column(String(100))
+    message: Mapped[str] = mapped_column(Text, nullable=False)
+    user_id: Mapped[str | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now, index=True)
+
+
+class ChatSessionRow(Base):
+    __tablename__ = "chat_sessions"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    user_id: Mapped[str] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    workspace_id: Mapped[str] = mapped_column(
+        ForeignKey("workspaces.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    title: Mapped[str | None] = mapped_column(String(255))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now, onupdate=utc_now, index=True)
+
+    user: Mapped[UserRow] = relationship(back_populates="chat_sessions")
+    workspace: Mapped[WorkspaceRow] = relationship(back_populates="chat_sessions")
+    messages: Mapped[list["ChatMessageRow"]] = relationship(
+        back_populates="session", cascade="all, delete-orphan", order_by="ChatMessageRow.created_at"
+    )
+
+
+class ChatMessageRow(Base):
+    __tablename__ = "chat_messages"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    session_id: Mapped[str] = mapped_column(
+        ForeignKey("chat_sessions.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    role: Mapped[str] = mapped_column(String(16), nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now, index=True)
+
+    session: Mapped[ChatSessionRow] = relationship(back_populates="messages")

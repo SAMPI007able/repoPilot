@@ -1,12 +1,13 @@
 <script setup lang="ts">
-import { MessageSquareText, SendHorizontal, Sparkles } from '@lucide/vue'
-import type { AIQueryResponse } from '../types/api'
+import { MessageSquareText, Plus, SendHorizontal, Sparkles } from '@lucide/vue'
+import { nextTick, ref, watch } from 'vue'
+import type { ChatMessage } from '../types/api'
 
-defineProps<{
+const props = defineProps<{
   workspaceName: string
   input: string
   busy: boolean
-  result: AIQueryResponse | null
+  messages: ChatMessage[]
   suggested: string[]
   error: string | null
 }>()
@@ -14,7 +15,19 @@ defineProps<{
 const emit = defineEmits<{
   (e: 'update:input', value: string): void
   (e: 'submit', value?: string): void
+  (e: 'new-chat'): void
 }>()
+
+const messageList = ref<HTMLElement | null>(null)
+
+watch(
+  () => [props.messages.length, props.busy],
+  async () => {
+    await nextTick()
+    if (messageList.value) messageList.value.scrollTop = messageList.value.scrollHeight
+  },
+  { flush: 'post' },
+)
 </script>
 
 <template>
@@ -24,24 +37,31 @@ const emit = defineEmits<{
         <MessageSquareText :size="14" />
         Ask the codebase
       </h2>
-      <span class="panel-heading__meta">Grounded in the indexed graph</span>
+      <div class="ask-panel__header-actions">
+        <span class="panel-heading__meta">Grounded in this workspace</span>
+        <button v-if="messages.length" class="btn btn-ghost ask-panel__new" type="button" :disabled="busy" @click="emit('new-chat')">
+          <Plus :size="13" /> New chat
+        </button>
+      </div>
     </div>
 
-    <div class="ask-panel__messages">
-      <div v-if="!result && !busy" class="ask-panel__empty">
+    <div ref="messageList" class="ask-panel__messages" aria-live="polite">
+      <div v-if="!messages.length && !busy" class="ask-panel__empty">
         <Sparkles :size="20" class="ask-panel__empty-icon" />
         <p>Ask anything about {{ workspaceName }}.</p>
-        <span>RepoPilot walks the dependency graph to answer.</span>
+        <span>Follow-up questions will remember this conversation.</span>
       </div>
-      <div v-else-if="busy" class="ask-panel__empty">
-        <p>Processing...</p>
+      <div v-for="message in messages" :key="message.id" class="ask-panel__message" :class="`ask-panel__message--${message.role}`">
+        <span class="ask-panel__role">{{ message.role === 'user' ? 'You' : 'RepoPilot' }}</span>
+        <pre>{{ message.content }}</pre>
       </div>
-      <div v-else class="ask-panel__response">
-        <pre>{{ result?.markdown }}</pre>
+      <div v-if="busy" class="ask-panel__message ask-panel__message--assistant ask-panel__message--thinking">
+        <span class="ask-panel__role">RepoPilot</span>
+        <p>Thinking in context…</p>
       </div>
     </div>
 
-    <div v-if="!result" class="chip-row ask-panel__suggested">
+    <div v-if="!messages.length" class="chip-row ask-panel__suggested">
       <button v-for="item in suggested" :key="item" class="chip chip--button" type="button" @click="emit('submit', item)">
         {{ item }}
       </button>

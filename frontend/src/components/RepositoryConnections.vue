@@ -19,11 +19,19 @@ import {
   FolderGit2
 } from '@lucide/vue'
 
-import { connectProvider, disconnectProvider, listProviderConnections, listProviderRepositories } from '../services/api'
+import {
+  connectProvider,
+  disconnectProvider,
+  listProviderBranches,
+  listProviderConnections,
+  listProviderRepositories,
+} from '../services/api'
 import type { ProviderConnection, ProviderRepository, SourceControlProvider } from '../types/api'
 
 defineProps<{ busy: boolean }>()
-const emit = defineEmits<{ import: [repository: ProviderRepository] }>()
+const emit = defineEmits<{
+  import: [repository: ProviderRepository, branch?: string]
+}>()
 
 const connections = ref<ProviderConnection[]>([])
 const repositories = ref<ProviderRepository[]>([])
@@ -34,6 +42,10 @@ const activeProvider = ref<SourceControlProvider | null>(null)
 const filter = ref('')
 const error = ref<string | null>(null)
 const selectedZip = ref<File | null>(null)
+const branchesByRepository = ref<Record<string, string[]>>({})
+const selectedBranches = ref<Record<string, string>>({})
+const loadingBranchIds = ref<Set<string>>(new Set())
+const branchErrors = ref<Record<string, string>>({})
 
 const providerMeta: Record<SourceControlProvider, {
   icon: typeof GitBranch
@@ -71,6 +83,9 @@ async function selectProvider(provider: SourceControlProvider, force = false) {
   activeProvider.value = provider
   filter.value = ''
   repositories.value = []
+  branchesByRepository.value = {}
+  selectedBranches.value = {}
+  branchErrors.value = {}
   loadingRepositories.value = true
   error.value = null
   try {
@@ -81,6 +96,33 @@ async function selectProvider(provider: SourceControlProvider, force = false) {
   } finally {
     loadingRepositories.value = false
   }
+}
+
+async function loadBranches(repository: ProviderRepository) {
+  if (branchesByRepository.value[repository.id] || loadingBranchIds.value.has(repository.id)) return
+  loadingBranchIds.value = new Set(loadingBranchIds.value).add(repository.id)
+  const nextErrors = { ...branchErrors.value }
+  delete nextErrors[repository.id]
+  branchErrors.value = nextErrors
+  try {
+    branchesByRepository.value = {
+      ...branchesByRepository.value,
+      [repository.id]: await listProviderBranches(repository),
+    }
+  } catch (caught) {
+    branchErrors.value = {
+      ...branchErrors.value,
+      [repository.id]: caught instanceof Error ? caught.message : 'Unable to load branches.',
+    }
+  } finally {
+    const nextLoading = new Set(loadingBranchIds.value)
+    nextLoading.delete(repository.id)
+    loadingBranchIds.value = nextLoading
+  }
+}
+
+function importRepository(repository: ProviderRepository) {
+  emit('import', repository, selectedBranches.value[repository.id] || undefined)
 }
 
 async function connect(provider: SourceControlProvider) {
@@ -261,9 +303,36 @@ onMounted(loadConnections)
               <span>Updated {{ formatDate(repository.updatedAt) }}</span>
             </div>
           </div>
-          <button class="repository-list__build" type="button" :disabled="busy" @click="emit('import', repository)">
-            <ArrowRight aria-hidden="true" /> {{ busy ? 'Building…' : 'Build' }}
-          </button>
+          <div class="repository-list__actions">
+            <label class="repository-list__branch">
+              <!-- <span class="sr-only">Branch for {{ repository.fullName }}</span> -->
+              <GitBranch aria-hidden="true" />
+              <select
+                v-model="selectedBranches[repository.id]"
+                :disabled="busy"
+                :aria-describedby="branchErrors[repository.id] ? `branch-error-${repository.id}` : undefined"
+                @focus="loadBranches(repository)"
+                @pointerdown="loadBranches(repository)"
+              >
+                <option value="">Default ({{ repository.defaultBranch }})</option>
+                <option v-if="loadingBranchIds.has(repository.id)" disabled>Loading branches…</option>
+                <option
+                  v-for="branch in branchesByRepository[repository.id] ?? []"
+                  :key="branch"
+                  :value="branch"
+                >{{ branch }}</option>
+              </select>
+            </label>
+            <span
+              v-if="branchErrors[repository.id]"
+              :id="`branch-error-${repository.id}`"
+              class="repository-list__branch-error"
+              role="status"
+            >{{ branchErrors[repository.id] }}</span>
+            <button class="repository-list__build" type="button" :disabled="busy" @click="importRepository(repository)">
+              <ArrowRight aria-hidden="true" /> {{ busy ? 'Building…' : 'Build' }}
+            </button>
+          </div>
         </article>
       </div>
     </section>

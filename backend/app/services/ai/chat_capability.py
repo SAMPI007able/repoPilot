@@ -13,6 +13,13 @@ class ChatCapability(AICapability):
         self.provider = provider
         self.prompt_builder = prompt_builder
 
-    def execute(self, repository_metadata: RepositoryMetadata, query: str) -> tuple[str, str]:
-        prompt = self.prompt_builder.build_prompt(query=query, repository_metadata=repository_metadata)
+    def execute(
+        self,
+        repository_metadata: RepositoryMetadata,
+        query: str,
+        history: list[tuple[str, str]] | None = None,
+    ) -> tuple[str, str]:
+        prompt = self.prompt_builder.build_prompt(
+            query=query, repository_metadata=repository_metadata, history=history,
+        )
         return prompt, self.provider.generate(prompt)

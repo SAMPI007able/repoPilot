@@ -14,8 +14,13 @@ class AIService:
         self.test_generation_capability = test_generation_capability
         self.documentation_capability = documentation_capability
 
-    def chat(self, repository_metadata, query: str) -> tuple[str, str]:
-        return self.chat_capability.execute(repository_metadata, query)
+    def chat(
+        self,
+        repository_metadata,
+        query: str,
+        history: list[tuple[str, str]] | None = None,
+    ) -> tuple[str, str]:
+        return self.chat_capability.execute(repository_metadata, query, history)
 
     def generate_tests(self, repository_metadata, target: str, test_type: str) -> tuple[str, str]:
         return self.test_generation_capability.execute(repository_metadata, target, test_type)

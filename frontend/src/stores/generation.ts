@@ -1,10 +1,10 @@
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { defineStore } from 'pinia'
 import posthog from 'posthog-js'
-import { analyzeImpact, extractAPIError, generateTests, queryAI } from '../services/api'
+import { analyzeImpact, extractAPIError, generateTests, getLatestChatSession, queryAI } from '../services/api'
 import { useWorkspaceStore } from './workspace'
 import { useFeatureFlagStore } from './features'
-import type { AIQueryResponse, ImpactAnalysisResponse } from '../types/api'
+import type { AIQueryResponse, ChatMessage, ImpactAnalysisResponse } from '../types/api'
 
 export type TabId = 'ask' | 'tests' | 'preview' | 'insights' | 'impact'
 export type TestMode = 'scenario' | 'file'
@@ -28,6 +28,8 @@ export const useGenerationStore = defineStore('generation', () => {
   const busy = ref(false)
   const error = ref<string | null>(null)
   const result = ref<AIQueryResponse | null>(null)
+  const chatSessionId = ref<string | null>(null)
+  const chatMessages = ref<ChatMessage[]>([])
 
   const tabs = computed(() => [
     { id: 'ask' as TabId, label: 'Ask the codebase' },
@@ -75,6 +77,13 @@ export const useGenerationStore = defineStore('generation', () => {
     error.value = null
     result.value = null
     genericQuery.value = ''
+    const pendingId = `pending-${crypto.randomUUID()}`
+    chatMessages.value.push({
+      id: pendingId,
+      role: 'user',
+      content: queryText,
+      createdAt: new Date().toISOString(),
+    })
 
     try {
       if (typeof posthog?.capture === 'function') posthog.capture('chat_message', {
@@ -85,15 +94,48 @@ export const useGenerationStore = defineStore('generation', () => {
         type: 'chat',
         workspaceId,
         query: queryText,
+        sessionId: chatSessionId.value,
+      })
+      chatSessionId.value = response.sessionId || chatSessionId.value
+      chatMessages.value.push({
+        id: `assistant-${crypto.randomUUID()}`,
+        role: 'assistant',
+        content: response.markdown,
+        createdAt: new Date().toISOString(),
       })
       result.value = response
       return response
     } catch (caughtError) {
+      chatMessages.value = chatMessages.value.filter((message) => message.id !== pendingId)
       error.value = extractMessage(caughtError, 'Failed to run query.')
       return null
     } finally {
       busy.value = false
     }
+  }
+
+  async function loadLatestChat(workspaceId: string | null) {
+    chatSessionId.value = null
+    chatMessages.value = []
+    if (!workspaceId) return
+    try {
+      const session = await getLatestChatSession(workspaceId)
+      if (workspaceStore.currentWorkspaceId !== workspaceId || !session) return
+      chatSessionId.value = session.id
+      chatMessages.value = session.messages
+    } catch (caughtError) {
+      if (workspaceStore.currentWorkspaceId === workspaceId) {
+        error.value = extractMessage(caughtError, 'Failed to load the latest chat.')
+      }
+    }
+  }
+
+  function startNewChat() {
+    chatSessionId.value = null
+    chatMessages.value = []
+    result.value = null
+    error.value = null
+    genericQuery.value = ''
   }
 
   async function runGenerationFromScenario(text?: string) {
@@ -239,6 +281,12 @@ export const useGenerationStore = defineStore('generation', () => {
     impactFile.value = value
   }
 
+  watch(
+    () => workspaceStore.currentWorkspaceId,
+    (workspaceId) => { void loadLatestChat(workspaceId) },
+    { immediate: true },
+  )
+
   return {
     tab,
     tabs,
@@ -257,11 +305,14 @@ export const useGenerationStore = defineStore('generation', () => {
     busy,
     error,
     result,
+    chatSessionId,
+    chatMessages,
     suggestedQuestions,
     suggestedScenarios,
     fileOptions,
     filteredFiles,
     runQuery,
+    startNewChat,
     runGenerationFromScenario,
     runGenerationFromFile,
     runImpactAnalysis,

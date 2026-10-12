@@ -5,6 +5,8 @@ import type { FeatureFlagKey } from '../types/api'
 
 const safeDefaults: Record<FeatureFlagKey, boolean> = {
   preview: false,
+  ai_generation: true,
+  uploads: true,
   code_quality: false,
 }
 

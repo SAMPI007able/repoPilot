@@ -1,4 +1,5 @@
 import unittest
+from types import SimpleNamespace
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
@@ -44,9 +45,25 @@ def quota_settings() -> RateLimitSettings:
 
 
 class FakeAIService:
-    def chat(self, metadata, query):
-        del metadata, query
+    def chat(self, metadata, query, history=None):
+        del metadata, query, history
         return "prompt", "answer"
+
+
+class FakeChatPersistence:
+    def create(self, user_id, workspace_id):
+        return SimpleNamespace(id=f"session-{user_id}-{workspace_id}")
+
+    def get(self, session_id, user_id, workspace_id):
+        del user_id, workspace_id
+        return SimpleNamespace(id=session_id)
+
+    def context(self, session_id, user_id, workspace_id):
+        del session_id, user_id, workspace_id
+        return []
+
+    def append_exchange(self, session_id, user_id, workspace_id, question, answer):
+        del session_id, user_id, workspace_id, question, answer
 
 
 class FakePreviewPersistence:
@@ -112,6 +129,10 @@ class RateLimitAPITests(unittest.TestCase):
             main, "rate_limit_guard", self.guard,
         ), patch.object(main, "_load_workspace", return_value=("", fixture_metadata())), patch.object(
             main, "ai_service", FakeAIService(),
+        ), patch.object(
+            main, "chat_persistence_service", FakeChatPersistence(),
+        ), patch.object(
+            main.admin_service, "record_usage",
         ):
             first = self.client.post("/ai/query", json={"type": "chat", "workspaceId": "workspace", "query": "hello"})
             rejected = self.client.post("/ai/query", json={"type": "chat", "workspaceId": "workspace", "query": "again"})

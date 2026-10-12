@@ -17,6 +17,14 @@ import type {
   ProviderRepository,
   SourceControlProvider,
   FeatureFlagsResponse,
+  ChatSession,
+  AdminBrowserSession,
+  AdminDashboard,
+  AdminFeatureFlag,
+  AdminLog,
+  AdminPreview,
+  AdminUsage,
+  AdminUser,
 } from '../types/api'
 
 export const apiBaseUrl = import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000'
@@ -101,10 +109,20 @@ export async function listProviderRepositories(provider: SourceControlProvider):
   })).data
 }
 
-export async function importProviderRepository(repository: ProviderRepository): Promise<WorkspaceBuildJob> {
+export async function listProviderBranches(repository: ProviderRepository): Promise<string[]> {
+  return (await api.get<string[]>(`/integrations/${repository.provider}/branches`, {
+    params: { owner: repository.owner, repo: repository.name },
+  })).data
+}
+
+export async function importProviderRepository(
+  repository: ProviderRepository,
+  branch?: string,
+): Promise<WorkspaceBuildJob> {
   return (await api.post<WorkspaceBuildJob>(`/integrations/${repository.provider}/repos/import`, {
     owner: repository.owner,
     repo: repository.name,
+    ...(branch ? { branch } : {}),
   })).data
 }
 
@@ -231,6 +249,15 @@ export async function queryAI(payload: AIQueryRequest): Promise<AIQueryResponse>
   return response.data
 }
 
+export async function getLatestChatSession(workspaceId: string): Promise<ChatSession | null> {
+  try {
+    return (await api.get<ChatSession>(`/workspaces/${workspaceId}/chat-sessions/latest`)).data
+  } catch (error) {
+    if (extractAPIError(error, '').status === 404) return null
+    throw error
+  }
+}
+
 export async function generateTests(payload: GenerateTestsRequest): Promise<AIQueryResponse> {
   const response = await queryAI({
     type: 'test_generation',
@@ -247,3 +274,16 @@ export async function analyzeImpact(payload: ImpactAnalysisRequest): Promise<Imp
   const response = await api.post<ImpactAnalysisResponse>('/workspaces/impact-analysis', payload)
   return response.data
 }
+
+export async function getAdminDashboard(): Promise<AdminDashboard> { return (await api.get('/admin/dashboard')).data }
+export async function listAdminUsers(query = ''): Promise<AdminUser[]> { return (await api.get('/admin/users', { params: { q: query } })).data }
+export async function setAdminUserSuspended(userId: string, suspended: boolean): Promise<AdminUser> { return (await api.put(`/admin/users/${userId}/status`, { suspended })).data }
+export async function deleteAdminUser(userId: string): Promise<void> { await api.delete(`/admin/users/${userId}`) }
+export async function listAdminPreviews(): Promise<AdminPreview[]> { return (await api.get('/admin/previews')).data }
+export async function terminateAdminPreview(previewId: string): Promise<void> { await api.post(`/admin/previews/${previewId}/terminate`) }
+export async function listAdminBrowserSessions(): Promise<AdminBrowserSession[]> { return (await api.get('/admin/browser-sessions')).data }
+export async function terminateAdminBrowserSession(sessionId: string): Promise<void> { await api.post(`/admin/browser-sessions/${sessionId}/terminate`) }
+export async function listAdminUsage(): Promise<AdminUsage[]> { return (await api.get('/admin/usage')).data }
+export async function listAdminFeatureFlags(): Promise<AdminFeatureFlag[]> { return (await api.get('/admin/feature-flags')).data }
+export async function updateAdminFeatureFlag(key: string, enabled: boolean): Promise<AdminFeatureFlag> { return (await api.put(`/admin/feature-flags/${key}`, { enabled })).data }
+export async function listAdminLogs(): Promise<AdminLog[]> { return (await api.get('/admin/logs')).data }

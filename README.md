@@ -107,13 +107,15 @@ The frontend expects the backend at `http://localhost:8000`. The sidebar refresh
 
 Trusted local preview stack
 
-With Docker Desktop running, start PostgreSQL, Redis, the API, RQ worker, expiry reconciler, and frontend together:
+With Docker Desktop running, start PostgreSQL, pgAdmin, Redis, the API, RQ worker, expiry reconciler, and frontend together:
 
 ```powershell
 docker compose up --build
 ```
 
 Then open `http://127.0.0.1:5173`. This mode is for trusted development repositories only; keep `PREVIEW_TRUSTED_LOCAL_EXECUTION=false` outside this local stack until the production sandbox phase is complete.
+
+To browse the Compose PostgreSQL database in pgAdmin, open `http://127.0.0.1:5050` and sign in with `admin@example.com` / `testforge-local`. Register a server using host `postgres`, port `5432`, database `testforge`, username `testforge`, and password `testforge-local`. The `postgres` hostname is reachable from pgAdmin inside the Compose network. pgAdmin's web port is bound to localhost; these credentials are for local development only.
 
 Testing
 

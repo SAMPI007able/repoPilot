@@ -50,6 +50,7 @@ class WorkspaceBuildService:
         owner_user_id: str | None = None,
         clone_authorization: str | None = None,
         trusted_provider_url: bool = False,
+        branch: str | None = None,
     ) -> WorkspaceBuildJob:
         git_url = git_url.strip() if trusted_provider_url else self.repository_service.validate_public_repository_url(git_url)
         repository_name = self.repository_service.extract_repo_name(git_url)
@@ -57,7 +58,8 @@ class WorkspaceBuildService:
             raise ValueError("Could not determine a repository name from githubUrl.")
 
         with self._lock:
-            active_job_id = self._active_by_workspace.get(git_url)
+            build_key = self._build_key(git_url, branch)
+            active_job_id = self._active_by_workspace.get(build_key)
             if active_job_id:
                 active_job = self._jobs[active_job_id]
                 if active_job.status in {"queued", "running"}:
@@ -72,7 +74,7 @@ class WorkspaceBuildService:
                 stages=self._create_stages(),
             )
             self._jobs[job.jobId] = job
-            self._active_by_workspace[git_url] = job.jobId
+            self._active_by_workspace[build_key] = job.jobId
             self.persistence_service.create_build(job)
             self._executor.submit(
                 self._run_build,
@@ -81,6 +83,7 @@ class WorkspaceBuildService:
                 repository_name,
                 documents or [],
                 clone_authorization,
+                branch,
             )
             return job.model_copy(deep=True)
 
@@ -118,6 +121,7 @@ class WorkspaceBuildService:
         repository_name: str,
         documents: list[tuple[str, bytes]],
         clone_authorization: str | None,
+        branch: str | None,
     ) -> None:
         workspace_id = self._jobs[job_id].workspaceId
         temporary_root: str | None = None
@@ -128,8 +132,13 @@ class WorkspaceBuildService:
             temporary_root = tempfile.mkdtemp(prefix=f"{job_id}-", dir=self.workspace_dir)
             destination_path = os.path.join(temporary_root, "repository")
             self._update_stage(job_id, "clone", "running")
-            if clone_authorization:
-                self.repository_service.clone_repository(git_url, destination_path, clone_authorization)
+            if clone_authorization or branch:
+                self.repository_service.clone_repository(
+                    git_url,
+                    destination_path,
+                    authorization=clone_authorization,
+                    branch=branch,
+                )
             else:
                 self.repository_service.clone_repository(git_url, destination_path)
             uploaded_docs = self._save_project_documents(destination_path, documents)
@@ -176,8 +185,9 @@ class WorkspaceBuildService:
                 cleanup_error = exc
             finally:
                 with self._lock:
-                    if self._active_by_workspace.get(git_url) == job_id:
-                        self._active_by_workspace.pop(git_url, None)
+                    build_key = self._build_key(git_url, branch)
+                    if self._active_by_workspace.get(build_key) == job_id:
+                        self._active_by_workspace.pop(build_key, None)
 
             if cleanup_error is not None:
                 with self._lock:
@@ -196,6 +206,10 @@ class WorkspaceBuildService:
                     )
                     failed_job = job.model_copy(deep=True)
                 self.persistence_service.fail_build(failed_job)
+
+    @staticmethod
+    def _build_key(git_url: str, branch: str | None) -> str:
+        return f"{git_url}#{branch or ''}"
 
     def _set_job_status(self, job_id: str, status: str) -> None:
         with self._lock:

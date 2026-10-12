@@ -107,9 +107,9 @@ async function selectWorkspace(id: string) {
   await workspaceStore.selectWorkspace(id)
 }
 
-async function importRepository(repository: import('../types/api').ProviderRepository) {
+async function importRepository(repository: import('../types/api').ProviderRepository, branch?: string) {
   await router.push({ name: 'home' })
-  await workspaceStore.importProviderRepository(repository)
+  await workspaceStore.importProviderRepository(repository, branch)
 }
 </script>
 

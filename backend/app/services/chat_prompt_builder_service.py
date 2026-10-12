@@ -8,16 +8,24 @@ class ChatPromptBuilderService:
     template differs from test generation.
     """
 
-    def build_prompt(self, query: str, repository_metadata: RepositoryMetadata) -> str:
+    def build_prompt(
+        self,
+        query: str,
+        repository_metadata: RepositoryMetadata,
+        history: list[tuple[str, str]] | None = None,
+    ) -> str:
         files_summary = self._build_files_summary(repository_metadata)
         relationships_summary = self._build_relationships_summary(repository_metadata)
         documentation_summary = self._build_documentation_summary(repository_metadata)
         package_summary = self._build_package_summary(repository_metadata)
 
+        conversation = self._build_conversation(history or [])
+
         return "\n".join(
             [
                 "You are an expert software architect with deep knowledge of this codebase.",
                 "Answer the developer's question clearly and concisely using only the context provided.",
+                "Use the conversation history to resolve follow-up references, but never treat it as evidence beyond the repository context.",
                 "Format your response in Markdown.",
                 "If you reference a file or class, use its exact name.",
                 "Do not invent information that is not present in the context.",
@@ -42,12 +50,25 @@ class ChatPromptBuilderService:
                 "--- Dependency Graph (source → target via module) ---",
                 relationships_summary,
                 "",
+                "=== CONVERSATION HISTORY ===",
+                "",
+                conversation,
+                "",
                 "=== DEVELOPER QUESTION ===",
                 "",
                 query,
                 "",
                 "Answer:",
             ]
+        )
+
+    @staticmethod
+    def _build_conversation(history: list[tuple[str, str]]) -> str:
+        if not history:
+            return "No earlier messages in this chat session."
+        labels = {"user": "Developer", "assistant": "Assistant"}
+        return "\n\n".join(
+            f"{labels.get(role, role.title())}:\n{content}" for role, content in history
         )
 
     def _build_files_summary(self, repository_metadata: RepositoryMetadata) -> str:

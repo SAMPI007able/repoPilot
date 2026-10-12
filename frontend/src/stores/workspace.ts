@@ -207,7 +207,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     }
   }
 
-  async function importProviderRepository(repository: ProviderRepository) {
+  async function importProviderRepository(repository: ProviderRepository, branch?: string) {
     busy.value = true
     error.value = null
     let workspaceId = `pending-${slugify(repository.fullName)}-${Date.now()}`
@@ -219,8 +219,12 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     })
     activeId.value = workspaceId
     try {
-      const captureProperties = { provider: repository.provider, repository_name: repository.fullName }
-      let buildJob = await startProviderRepositoryImport(repository)
+      const captureProperties = {
+        provider: repository.provider,
+        repository_name: repository.fullName,
+        branch: branch || repository.defaultBranch,
+      }
+      let buildJob = await startProviderRepositoryImport(repository, branch)
       if (typeof posthog?.capture === 'function') posthog.capture('repo_connected', captureProperties)
       if (typeof posthog?.capture === 'function') posthog.capture('repo_indexed', { workspace_id: buildJob.workspaceId, ...captureProperties })
       replaceWorkspaceId(workspaceId, buildJob.workspaceId, buildJob.jobId)

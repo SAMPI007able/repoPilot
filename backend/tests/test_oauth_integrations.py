@@ -7,6 +7,7 @@ from urllib.parse import parse_qs, urlparse
 from cryptography.fernet import Fernet
 
 from app.models.identity_models import TokenClaims
+from app.models.integration_models import ImportRepositoryRequest
 from app.persistence.database import Database
 from app.persistence.identity_persistence_service import IdentityPersistenceService
 from app.persistence.oauth_persistence_service import OAuthPersistenceService
@@ -123,6 +124,44 @@ class OAuthIntegrationTests(unittest.TestCase):
             with self.assertRaisesRegex(Exception, "invalid pagination URL"):
                 service._bitbucket_paginated_values(
                     "https://api.bitbucket.org/2.0/user/workspaces", "token", "https://api.bitbucket.org/2.0"
+                )
+
+    def test_bitbucket_branches_use_refs_endpoint_and_pagination(self) -> None:
+        service = OAuthIntegrationService(self.persistence)
+        config = service.providers["bitbucket"]
+        first_page = (
+            f"{config.api_url}/repositories/acme/widgets/refs/branches?pagelen=100"
+        )
+        second_page = f"{config.api_url}/repositories/acme/widgets/refs/branches?page=2"
+        responses = {
+            first_page: {
+                "values": [{"name": "main"}, {"name": "feature/widgets"}],
+                "next": second_page,
+            },
+            second_page: {"values": [{"name": "release"}, {"name": "main"}]},
+        }
+
+        with patch.object(
+            service, "_connection_token", return_value=(config, "access-token")
+        ), patch.object(
+            service, "_json", side_effect=lambda _method, url, _token: responses[url]
+        ):
+            branches = service.branches(self.first.user_id, "bitbucket", "acme", "widgets")
+
+        self.assertEqual(["feature/widgets", "main", "release"], branches)
+
+    def test_import_request_accepts_optional_safe_branch(self) -> None:
+        self.assertIsNone(ImportRepositoryRequest(owner="acme", repo="widgets").branch)
+        self.assertEqual(
+            "feature/widgets",
+            ImportRepositoryRequest(
+                owner="acme", repo="widgets", branch="feature/widgets"
+            ).branch,
+        )
+        for invalid_branch in ("--upload-pack=evil", "feature/../main", "main@{upstream}"):
+            with self.subTest(branch=invalid_branch), self.assertRaises(Exception):
+                ImportRepositoryRequest(
+                    owner="acme", repo="widgets", branch=invalid_branch
                 )
 
     @staticmethod

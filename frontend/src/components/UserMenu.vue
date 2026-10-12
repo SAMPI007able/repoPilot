@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ChevronDown, LogIn, LogOut, UserRound } from '@lucide/vue'
+import { ChevronDown, LogIn, LogOut, Settings, UserRound } from '@lucide/vue'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { CurrentUser } from '../types/api'
 
@@ -119,6 +119,16 @@ onBeforeUnmount(() => {
             </span>
           </div>
           <div class="user-menu__divider" />
+          <RouterLink
+            v-if="user.role === 'ADMIN'"
+            class="user-menu__action"
+            to="/admin"
+            role="menuitem"
+            @click="closeMenu()"
+          >
+            <Settings aria-hidden="true" />
+            <span>Admin panel</span>
+          </RouterLink>
           <button
             ref="signOutButton"
             class="user-menu__action"

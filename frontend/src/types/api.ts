@@ -18,7 +18,7 @@ export interface CurrentUser {
   lastLoginAt: string | null
 }
 
-export type FeatureFlagKey = 'preview' | 'code_quality'
+export type FeatureFlagKey = 'preview' | 'ai_generation' | 'uploads' | 'code_quality'
 
 export interface FeatureFlagsResponse {
   flags: Record<string, boolean>
@@ -268,6 +268,7 @@ export interface AIQueryRequest {
   type: AIQueryType
   workspaceId: string
   query?: string
+  sessionId?: string | null
   target?: string
   scenario?: string
   generationMode?: 'file' | 'scenario'
@@ -279,8 +280,25 @@ export interface AIQueryResponse {
   workspaceId: string
   prompt: string
   markdown: string
+  sessionId?: string | null
   target?: string
   testType?: string
+}
+
+export interface ChatMessage {
+  id: string
+  role: 'user' | 'assistant'
+  content: string
+  createdAt: string
+}
+
+export interface ChatSession {
+  id: string
+  workspaceId: string
+  title: string | null
+  messages: ChatMessage[]
+  createdAt: string
+  updatedAt: string
 }
 
 export interface GenerateTestsRequest {
@@ -298,3 +316,11 @@ export interface GenerateTestsResponse {
   prompt: string
   markdown: string
 }
+
+export interface AdminDashboard { totalUsers: number; activePreviews: number; activeBrowserSessions: number }
+export interface AdminUser { id: string; primaryEmail: string; displayName: string | null; status: CurrentUser['status']; role: CurrentUser['role']; createdAt: string; lastLoginAt: string | null }
+export interface AdminPreview { id: string; workspaceId: string; userId: string | null; userEmail: string | null; repositoryUrl: string; status: PreviewStatus; provider: string; createdAt: string; expiresAt: string }
+export interface AdminBrowserSession { id: string; userId: string | null; userEmail: string | null; status: string; provider: string; createdAt: string; expiresAt: string | null }
+export interface AdminUsage { userId: string; primaryEmail: string; aiRequests: number; previewCount: number; previewMinutes: number; storageBytes: number }
+export interface AdminFeatureFlag { key: string; enabled: boolean; description: string | null; updatedAt: string; updatedByUserId: string | null }
+export interface AdminLog { id: string; category: string; severity: string; code: string | null; message: string; userId: string | null; createdAt: string }

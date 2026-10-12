@@ -27,7 +27,7 @@ class FeatureFlagPersistenceTests(unittest.TestCase):
         self.service.ensure_defaults()
         self.assertEqual(
             self.service.client_flags(),
-            {"code_quality": False, "preview": False},
+            {"ai_generation": True, "code_quality": False, "preview": False, "uploads": True},
         )
         self.assertFalse(self.service.is_enabled("unknown"))
 

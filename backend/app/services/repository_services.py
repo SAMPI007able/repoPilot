@@ -1,3 +1,4 @@
+import base64
 import os
 import shutil
 import stat
@@ -55,7 +56,13 @@ class RepositoryService:
             raise ValueError("Repository URL must not include query parameters or fragments.")
         return git_url.strip()
 
-    def clone_repository(self, git_url: str, destination_path: str, authorization: str | None = None) -> None:
+    def clone_repository(
+        self,
+        git_url: str,
+        destination_path: str,
+        authorization: str | None = None,
+        branch: str | None = None,
+    ) -> None:
         """
         Clone a Git repository from the given URL to the specified destination path.
         If the directory already exists, clear it first.
@@ -73,21 +80,66 @@ class RepositoryService:
                 print(f"Failed to clear directory {destination_path}: {e}")
                 # We can try to proceed anyway or raise
         
+        clone_url = self._without_url_credentials(git_url)
+
         try:
+            environment = {"GIT_TERMINAL_PROMPT": "0"}
             if authorization:
-                with git.Git().custom_environment(
-                    GIT_CONFIG_COUNT="1",
-                    GIT_CONFIG_KEY_0="http.extraHeader",
-                    GIT_CONFIG_VALUE_0=f"Authorization: Bearer {authorization}",
-                    GIT_TERMINAL_PROMPT="0",
-                ):
-                    git.Repo.clone_from(git_url, destination_path)
-            else:
-                git.Repo.clone_from(git_url, destination_path)
-            print(f"Repository cloned from {git_url} to {destination_path}")
+                environment.update(self._git_authorization_environment(clone_url, authorization))
+            clone_options = {"branch": branch, "single_branch": True} if branch else {}
+            git.Repo.clone_from(
+                clone_url,
+                destination_path,
+                env=environment,
+                **clone_options,
+            )
+            print(f"Repository cloned from {clone_url} to {destination_path}")
         except Exception as e:
             print(f"Failed to clone repository: {e}")
             raise e
+
+    @staticmethod
+    def _without_url_credentials(git_url: str) -> str:
+        """Remove provider-supplied user info so Git never prompts for a missing password."""
+        parsed = urllib.parse.urlsplit(git_url.strip())
+        if not parsed.hostname:
+            return git_url.strip()
+        hostname = parsed.hostname
+        if ":" in hostname:
+            hostname = f"[{hostname}]"
+        netloc = hostname
+        if parsed.port is not None:
+            netloc += f":{parsed.port}"
+        return urllib.parse.urlunsplit(
+            (parsed.scheme, netloc, parsed.path, parsed.query, parsed.fragment)
+        )
+
+    @staticmethod
+    def _git_authorization_environment(git_url: str, token: str) -> dict[str, str]:
+        """Build a host-scoped Git auth header for supported OAuth providers."""
+        parsed = urllib.parse.urlsplit(git_url)
+        hostname = (parsed.hostname or "").lower()
+        basic_usernames = {
+            "bitbucket.org": "x-token-auth",
+            "github.com": "x-access-token",
+            "www.github.com": "x-access-token",
+            "gitlab.com": "oauth2",
+        }
+        username = basic_usernames.get(hostname)
+        if username:
+            credentials = base64.b64encode(
+                f"{username}:{token}".encode("utf-8")
+            ).decode("ascii")
+            header = f"Authorization: Basic {credentials}"
+        else:
+            header = f"Authorization: Bearer {token}"
+
+        origin = f"{parsed.scheme}://{parsed.netloc}/"
+        return {
+            "GIT_CONFIG_COUNT": "1",
+            "GIT_CONFIG_KEY_0": f"http.{origin}.extraHeader",
+            "GIT_CONFIG_VALUE_0": header,
+        }
 
     def get_commit_sha(self, repository_path: str) -> str | None:
         try:

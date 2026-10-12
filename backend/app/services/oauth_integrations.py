@@ -126,6 +126,36 @@ class OAuthIntegrationService:
             raise IntegrationError(404, "The repository is not available through this connection.")
         return match
 
+    def branches(self, user_id: str, provider: str, owner: str, repo: str) -> list[str]:
+        config, token = self._connection_token(user_id, provider)
+        safe_owner = urllib.parse.quote(owner, safe="")
+        safe_repo = urllib.parse.quote(repo, safe="")
+        if provider == "github":
+            items = self._json(
+                "GET",
+                f"{config.api_url}/repos/{safe_owner}/{safe_repo}/branches?per_page=100",
+                token,
+            )
+        elif provider == "gitlab":
+            project = urllib.parse.quote(f"{owner}/{repo}", safe="")
+            items = self._json(
+                "GET",
+                f"{config.api_url}/projects/{project}/repository/branches?per_page=100",
+                token,
+            )
+        else:
+            items = self._bitbucket_paginated_values(
+                f"{config.api_url}/repositories/{safe_owner}/{safe_repo}/refs/branches?pagelen=100",
+                token,
+                config.api_url,
+            )
+        names = {
+            str(item.get("name"))
+            for item in items
+            if isinstance(item, dict) and item.get("name")
+        }
+        return sorted(names, key=str.casefold)
+
     def content(self, user_id: str, provider: str, owner: str, repo: str, path: str, ref: str | None) -> RepositoryContent:
         config, token = self._connection_token(user_id, provider)
         safe_path = urllib.parse.quote(path.strip("/"), safe="/")

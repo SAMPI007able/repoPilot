@@ -5,10 +5,14 @@ import type { ProviderRepository } from '../types/api'
 
 defineProps<{ busy: boolean }>()
 
-defineEmits<{
+const emit = defineEmits<{
   back: []
-  import: [repository: ProviderRepository]
+  import: [repository: ProviderRepository, branch?: string]
 }>()
+
+function importRepository(repository: ProviderRepository, branch?: string) {
+  emit('import', repository, branch)
+}
 </script>
 
 <template>
@@ -20,6 +24,6 @@ defineEmits<{
       </button>
       <strong>Your repositories</strong>
     </header>
-    <RepositoryConnections :busy="busy" @import="$emit('import', $event)" />
+    <RepositoryConnections :busy="busy" @import="importRepository" />
   </div>
 </template>

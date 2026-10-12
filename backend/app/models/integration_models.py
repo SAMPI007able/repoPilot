@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class ProviderConnection(BaseModel):
@@ -38,4 +38,20 @@ class RepositoryContent(BaseModel):
 class ImportRepositoryRequest(BaseModel):
     owner: str
     repo: str
+    branch: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=255,
+        pattern=r"^[A-Za-z0-9_][A-Za-z0-9._/-]*$",
+    )
     project_docs: list[str] = Field(default_factory=list, alias="projectDocs")
+
+    @model_validator(mode="after")
+    def validate_branch(self):
+        if self.branch and (
+            ".." in self.branch
+            or "@{" in self.branch
+            or self.branch.endswith((".", "/"))
+        ):
+            raise ValueError("branch is not a safe Git branch name")
+        return self

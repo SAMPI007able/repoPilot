@@ -43,11 +43,17 @@ from app.models.preview_models import (
     PreviewStatus,
 )
 from app.models.identity_models import CurrentUserResponse, Principal
+from app.models.admin_models import (
+    AdminBrowserSession, AdminDashboard, AdminLog, AdminPreview, AdminUsage,
+    AdminUser, AdminUserStatusUpdate,
+)
 from app.models.integration_models import (
     ImportRepositoryRequest, OAuthConnectResponse, ProviderConnection,
     ProviderRepository, RepositoryContent,
 )
 from app.persistence.identity_persistence_service import IdentityPersistenceService
+from app.persistence.chat_persistence_service import ChatPersistenceService, ChatSessionNotFoundError
+from app.models.chat_models import ChatSession
 from app.services.auth_dependencies import AuthenticationDependencies
 from app.services.authentication import AuthenticationError, create_token_verifier
 from app.persistence.preview_persistence_service import (
@@ -103,6 +109,7 @@ from app.config.rate_limit_settings import RateLimitSettings
 from app.services.rate_limit_guard import QuotaAPIError, RateLimitDecision, RateLimitGuard
 from app.services.rate_limit_service import RateLimitBackendUnavailable, RateLimitService
 from app.services.telemetry import Telemetry
+from app.services.admin_service import AdminConflictError, AdminResourceNotFoundError, AdminService
 
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -157,6 +164,10 @@ async def handle_preview_lab_error(request: Request, exc: PreviewLabAPIError):
 
 @app.exception_handler(AuthenticationError)
 async def handle_authentication_error(request: Request, exc: AuthenticationError):
+    try:
+        admin_service.record_log("authentication", exc.message, code=exc.code)
+    except Exception:
+        pass
     envelope = PreviewErrorEnvelope(
         code=exc.code, message=exc.message, retryable=exc.retryable,
         details={}, correlationId=_correlation_id(request),
@@ -236,6 +247,8 @@ database.create_schema()
 feature_flag_service = FeatureFlagPersistenceService(database)
 feature_flag_service.ensure_defaults()
 identity_persistence_service = IdentityPersistenceService(database)
+chat_persistence_service = ChatPersistenceService(database)
+admin_service = AdminService(database)
 oauth_persistence_service = OAuthPersistenceService(database)
 oauth_integration_service = OAuthIntegrationService(oauth_persistence_service)
 auth = AuthenticationDependencies(identity_persistence_service, create_token_verifier())
@@ -303,6 +316,7 @@ class QueryRequest(BaseModel):
     type: Literal["chat", "test_generation"]
     workspaceId: str
     query: Optional[str] = None      # used by chat
+    sessionId: Optional[str] = None  # scopes follow-up context for chat
     target: Optional[str] = None     # used by test_generation
     scenario: Optional[str] = None   # used by scenario-based test_generation
     generationMode: Literal["file", "scenario"] = "file"
@@ -314,6 +328,7 @@ class QueryResponse(BaseModel):
     workspaceId: str
     prompt: str
     markdown: str
+    sessionId: Optional[str] = None
     # Optional — only present for test_generation
     target: Optional[str] = None
     testType: Optional[str] = None
@@ -443,6 +458,21 @@ def list_integration_repositories(provider: str, principal: Principal = Depends(
         raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
 
 
+@app.get("/integrations/{provider}/branches", response_model=list[str])
+def list_integration_repository_branches(
+    provider: str,
+    owner: str,
+    repo: str,
+    principal: Principal = Depends(auth.active_principal),
+):
+    try:
+        return oauth_integration_service.branches(
+            principal.user_id, provider, owner, repo
+        )
+    except IntegrationError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+
+
 @app.get("/integrations/{provider}/repos/{owner}/{repo}/contents/{path:path}", response_model=RepositoryContent)
 def get_integration_repository_content(provider: str, owner: str, repo: str, path: str, ref: str | None = None, principal: Principal = Depends(auth.active_principal)):
     try:
@@ -459,6 +489,15 @@ def import_integration_repository(
     try:
         repository = oauth_integration_service.repository(principal.user_id, provider, payload.owner, payload.repo)
         token = oauth_integration_service.access_token(principal.user_id, provider)
+        if payload.branch:
+            branches = oauth_integration_service.branches(
+                principal.user_id, provider, payload.owner, payload.repo
+            )
+            if payload.branch not in branches:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Branch '{payload.branch}' is not available in this repository.",
+                )
         _apply_rate_headers(response, rate_limit_guard.enforce(principal, "repository_index"))
         telemetry.capture(principal.user_id, "repo_connected", {
             "source": "integration_import",
@@ -470,6 +509,7 @@ def import_integration_repository(
         workspace = workspace_build_service.start_build(
             repository.clone_url, owner_user_id=principal.user_id,
             clone_authorization=token, trusted_provider_url=True,
+            branch=payload.branch,
         )
         telemetry.capture(principal.user_id, "repo_indexed", {
             "source": "integration_import",
@@ -498,6 +538,7 @@ def index_workspace(
 
     try:
         if project_docs:
+            _require_feature("uploads")
             _apply_rate_headers(response, rate_limit_guard.enforce(principal, "document_upload"))
         _apply_rate_headers(response, rate_limit_guard.enforce(principal, "repository_index"))
         documents = [
@@ -855,6 +896,27 @@ def delete_workspace(workspace_id: str, principal: Principal = Depends(auth.acti
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
+@app.post("/workspaces/{workspace_id}/chat-sessions", response_model=ChatSession, status_code=201)
+def create_chat_session(
+    workspace_id: str,
+    principal: Principal = Depends(auth.active_principal),
+):
+    _authorize_workspace(workspace_id, principal)
+    return chat_persistence_service.create(principal.user_id, workspace_id)
+
+
+@app.get("/workspaces/{workspace_id}/chat-sessions/latest", response_model=ChatSession)
+def latest_chat_session(
+    workspace_id: str,
+    principal: Principal = Depends(auth.active_principal),
+):
+    _authorize_workspace(workspace_id, principal)
+    session = chat_persistence_service.latest(principal.user_id, workspace_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="No chat session exists for this workspace.")
+    return session
+
+
 @app.post("/ai/query", response_model=QueryResponse)
 def ai_query(payload: QueryRequest, response: Response, principal: Principal = Depends(auth.active_principal)):
     """
@@ -865,6 +927,7 @@ def ai_query(payload: QueryRequest, response: Response, principal: Principal = D
     - "test_generation"  → generate tests for a target file/class
     """
     try:
+        _require_feature("ai_generation")
         _, repository_metadata = _load_workspace(payload.workspaceId, principal)
 
         if payload.type == "chat":
@@ -872,7 +935,20 @@ def ai_query(payload: QueryRequest, response: Response, principal: Principal = D
                 raise HTTPException(status_code=400, detail="query is required for type=chat")
 
             _apply_rate_headers(response, rate_limit_guard.enforce(principal, "project_chat"))
-            prompt, markdown = ai_service.chat(repository_metadata, payload.query)
+            if payload.sessionId:
+                chat_session = chat_persistence_service.get(
+                    payload.sessionId, principal.user_id, payload.workspaceId,
+                )
+            else:
+                chat_session = chat_persistence_service.create(principal.user_id, payload.workspaceId)
+            history = chat_persistence_service.context(
+                chat_session.id, principal.user_id, payload.workspaceId,
+            )
+            prompt, markdown = ai_service.chat(repository_metadata, payload.query, history)
+            chat_persistence_service.append_exchange(
+                chat_session.id, principal.user_id, payload.workspaceId, payload.query, markdown,
+            )
+            admin_service.record_usage(principal.user_id, "ai_request")
             telemetry.capture(principal.user_id, "chat_message", {
                 "workspace_id": payload.workspaceId,
                 "query_length": len(payload.query or ""),
@@ -882,6 +958,7 @@ def ai_query(payload: QueryRequest, response: Response, principal: Principal = D
                 workspaceId=payload.workspaceId,
                 prompt=prompt,
                 markdown=markdown,
+                sessionId=chat_session.id,
             )
 
         elif payload.type == "test_generation":
@@ -917,6 +994,8 @@ def ai_query(payload: QueryRequest, response: Response, principal: Principal = D
                     "test_type": test_type,
                 })
 
+            admin_service.record_usage(principal.user_id, "ai_request")
+
             return QueryResponse(
                 type="test_generation",
                 workspaceId=payload.workspaceId,
@@ -929,6 +1008,8 @@ def ai_query(payload: QueryRequest, response: Response, principal: Principal = D
         else:
             raise HTTPException(status_code=400, detail=f"Unsupported query type: {payload.type}")
 
+    except ChatSessionNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Chat session not found in this workspace.") from exc
     except (HTTPException, QuotaAPIError):
         raise
     except AIProviderUnavailableError as exc:
@@ -943,9 +1024,11 @@ def ai_query(payload: QueryRequest, response: Response, principal: Principal = D
 def generate_tests(payload: GenerateTestsRequest, response: Response, principal: Principal = Depends(auth.active_principal)):
     """Deprecated — use POST /ai/query with type=test_generation instead."""
     try:
+        _require_feature("ai_generation")
         _, repository_metadata = _load_workspace(payload.workspaceId, principal)
         _apply_rate_headers(response, rate_limit_guard.enforce(principal, "ai_generation"))
         prompt, markdown = ai_service.generate_tests(repository_metadata, payload.target, payload.type)
+        admin_service.record_usage(principal.user_id, "ai_request")
 
         return GenerateTestsResponse(
             workspaceId=payload.workspaceId,
@@ -995,6 +1078,88 @@ def clear_user_rate_limits(
             503, "RATE_LIMIT_UNAVAILABLE", "The quota service is temporarily unavailable.",
             {}, {"Retry-After": "30"},
         ) from exc
+
+
+@app.get("/admin/dashboard", response_model=AdminDashboard)
+def admin_dashboard(principal: Principal = Depends(auth.admin_principal)):
+    del principal
+    return admin_service.dashboard()
+
+
+@app.get("/admin/users", response_model=list[AdminUser])
+def admin_users(q: str = "", principal: Principal = Depends(auth.admin_principal)):
+    del principal
+    return admin_service.users(q)
+
+
+@app.put("/admin/users/{user_id}/status", response_model=AdminUser)
+def admin_update_user_status(
+    user_id: str,
+    payload: AdminUserStatusUpdate,
+    principal: Principal = Depends(auth.admin_principal),
+):
+    try:
+        return admin_service.set_suspended(user_id, payload.suspended, principal.user_id)
+    except AdminResourceNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="User not found.") from exc
+    except AdminConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@app.delete("/admin/users/{user_id}", status_code=204)
+def admin_delete_user(user_id: str, principal: Principal = Depends(auth.admin_principal)):
+    try:
+        admin_service.delete_user(user_id, principal.user_id)
+    except AdminResourceNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="User not found.") from exc
+    except AdminConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@app.get("/admin/previews", response_model=list[AdminPreview])
+def admin_previews(principal: Principal = Depends(auth.admin_principal)):
+    del principal
+    return admin_service.active_previews()
+
+
+@app.post("/admin/previews/{preview_id}/terminate", response_model=PreviewEnvironment, status_code=202)
+def admin_terminate_preview(preview_id: str, principal: Principal = Depends(auth.admin_principal)):
+    del principal
+    try:
+        preview = preview_service.stop(preview_id)
+        owner_user_id = preview_persistence_service.owner_user_id(preview_id)
+        if owner_user_id:
+            rate_limit_service.release_concurrency_slot(owner_user_id, "preview", preview_id)
+        return preview
+    except Exception as exc:
+        _raise_preview_error(exc)
+
+
+@app.get("/admin/browser-sessions", response_model=list[AdminBrowserSession])
+def admin_browser_sessions(principal: Principal = Depends(auth.admin_principal)):
+    del principal
+    return admin_service.active_browser_sessions()
+
+
+@app.post("/admin/browser-sessions/{session_id}/terminate", status_code=204)
+def admin_terminate_browser_session(session_id: str, principal: Principal = Depends(auth.admin_principal)):
+    del principal
+    try:
+        admin_service.terminate_browser_session(session_id)
+    except AdminResourceNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Browser session not found.") from exc
+
+
+@app.get("/admin/usage", response_model=list[AdminUsage])
+def admin_usage(principal: Principal = Depends(auth.admin_principal)):
+    del principal
+    return admin_service.usage()
+
+
+@app.get("/admin/logs", response_model=list[AdminLog])
+def admin_logs(principal: Principal = Depends(auth.admin_principal)):
+    del principal
+    return admin_service.logs()
 
 
 @app.get("/admin/feature-flags", response_model=list[FeatureFlagRecord])
