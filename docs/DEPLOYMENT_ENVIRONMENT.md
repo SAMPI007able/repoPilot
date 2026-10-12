@@ -66,6 +66,14 @@ other backend credentials in a `VITE_*` variable.
 
 ## Railway or Fly backend variables
 
+The repository root contains a production backend `Dockerfile`, so an existing
+Railway service connected to the monorepo root will use Docker instead of asking
+Railpack to guess between Python and Node. Leave **Root Directory** empty (`/`)
+and redeploy. Alternatively, set **Root Directory** to `/backend`; Railway will
+then detect `backend/Dockerfile`. Clear custom build/start overrides in Railway;
+the root image includes `start.sh`, starts Uvicorn, and binds to Railway's
+injected `PORT`.
+
 Start from the backend sections of `.env.example`. At minimum for the proposed
 production stack, configure:
 

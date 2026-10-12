@@ -79,6 +79,8 @@ See the [Phase 0 architecture assessment](docs/realtime-preview/phase-0-assessme
 
 Local development uses SQLite and local compressed artifacts by default. The canonical variable list is [`.env.example`](.env.example); the [deployment environment guide](docs/DEPLOYMENT_ENVIRONMENT.md) maps it to Vercel, Railway/Fly, Neon, Upstash, AWS S3, PostHog, and Auth0. `WORKSPACE_BUILD_JOBS` controls concurrent repository builds, while `WORKSPACE_PARSE_WORKERS` controls parser batches within each build.
 
+The root [Dockerfile](Dockerfile) packages the backend when Railway builds this monorepo from `/`; see the deployment guide before connecting the service.
+
 Legacy checkout migration
 
 Existing clones under `backend/workspace/repositories` can be persisted without deleting them:
