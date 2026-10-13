@@ -1,4 +1,5 @@
 import unittest
+import json
 from types import SimpleNamespace
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
@@ -49,8 +50,15 @@ class FakeAIService:
         del metadata, query, history
         return "prompt", "answer"
 
+    def stream_chat(self, metadata, query, history=None):
+        del metadata, query, history
+        return "prompt", iter(["streamed ", "answer"])
+
 
 class FakeChatPersistence:
+    def __init__(self):
+        self.exchanges = []
+
     def create(self, user_id, workspace_id):
         return SimpleNamespace(id=f"session-{user_id}-{workspace_id}")
 
@@ -63,7 +71,7 @@ class FakeChatPersistence:
         return []
 
     def append_exchange(self, session_id, user_id, workspace_id, question, answer):
-        del session_id, user_id, workspace_id, question, answer
+        self.exchanges.append((session_id, user_id, workspace_id, question, answer))
 
 
 class FakePreviewPersistence:
@@ -144,6 +152,31 @@ class RateLimitAPITests(unittest.TestCase):
         self.assertEqual(rejected.json()["code"], "RATE_LIMIT_EXCEEDED")
         self.assertIn("X-RateLimit-Reset", rejected.headers)
         self.assertEqual(independent.status_code, 200)
+
+    def test_chat_stream_emits_deltas_and_persists_completed_answer(self):
+        user = principal("stream-user")
+        persistence = FakeChatPersistence()
+        main.app.dependency_overrides[main.auth.active_principal] = lambda: user
+        with patch.object(main, "rate_limit_service", self.service), patch.object(
+            main, "rate_limit_guard", self.guard,
+        ), patch.object(main, "_load_workspace", return_value=("", fixture_metadata())), patch.object(
+            main, "ai_service", FakeAIService(),
+        ), patch.object(
+            main, "chat_persistence_service", persistence,
+        ), patch.object(main.admin_service, "record_usage"), patch.object(
+            main.telemetry, "capture",
+        ):
+            response = self.client.post(
+                "/ai/query/stream",
+                json={"type": "chat", "workspaceId": "workspace", "query": "hello"},
+            )
+
+        events = [json.loads(line) for line in response.text.splitlines()]
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.headers["content-type"], "application/x-ndjson")
+        self.assertEqual([item["type"] for item in events], ["metadata", "delta", "delta", "done"])
+        self.assertEqual("".join(item.get("text", "") for item in events), "streamed answer")
+        self.assertEqual(persistence.exchanges[-1][-1], "streamed answer")
 
     def test_preview_concurrency_blocks_then_stop_releases(self):
         user = principal("preview-user")

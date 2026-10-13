@@ -1,6 +1,7 @@
 from app.services.ai.chat_capability import ChatCapability
 from app.services.ai.documentation_capability import DocumentationCapability
 from app.services.ai.test_generation_capability import TestGenerationCapability
+from collections.abc import Iterator
 
 
 class AIService:
@@ -21,6 +22,14 @@ class AIService:
         history: list[tuple[str, str]] | None = None,
     ) -> tuple[str, str]:
         return self.chat_capability.execute(repository_metadata, query, history)
+
+    def stream_chat(
+        self,
+        repository_metadata,
+        query: str,
+        history: list[tuple[str, str]] | None = None,
+    ) -> tuple[str, Iterator[str]]:
+        return self.chat_capability.stream(repository_metadata, query, history)
 
     def generate_tests(self, repository_metadata, target: str, test_type: str) -> tuple[str, str]:
         return self.test_generation_capability.execute(repository_metadata, target, test_type)

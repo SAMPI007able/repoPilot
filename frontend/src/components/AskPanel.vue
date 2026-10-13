@@ -21,7 +21,11 @@ const emit = defineEmits<{
 const messageList = ref<HTMLElement | null>(null)
 
 watch(
-  () => [props.messages.length, props.busy],
+  () => [
+    props.messages.length,
+    props.messages[props.messages.length - 1]?.content.length ?? 0,
+    props.busy,
+  ],
   async () => {
     await nextTick()
     if (messageList.value) messageList.value.scrollTop = messageList.value.scrollHeight
@@ -55,7 +59,10 @@ watch(
         <span class="ask-panel__role">{{ message.role === 'user' ? 'You' : 'RepoPilot' }}</span>
         <pre>{{ message.content }}</pre>
       </div>
-      <div v-if="busy" class="ask-panel__message ask-panel__message--assistant ask-panel__message--thinking">
+      <div
+        v-if="busy && (!messages.length || messages[messages.length - 1]?.role !== 'assistant')"
+        class="ask-panel__message ask-panel__message--assistant ask-panel__message--thinking"
+      >
         <span class="ask-panel__role">RepoPilot</span>
         <p>Thinking in context…</p>
       </div>

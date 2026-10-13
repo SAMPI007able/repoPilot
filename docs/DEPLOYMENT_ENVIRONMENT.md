@@ -84,6 +84,8 @@ OAUTH_CALLBACK_BASE_URL=https://api.example.com
 CORS_ORIGINS=https://app.example.com
 
 GEMINI_API_KEY=...
+GEMINI_CHAT_THINKING_LEVEL=minimal
+GEMINI_GENERATION_THINKING_LEVEL=low
 DATABASE_URL=postgresql://...neon.../testforge?sslmode=require
 REDIS_URL=rediss://...upstash...
 

@@ -17,13 +17,25 @@ class FakeModels:
     def __init__(self, outcomes: list[object]) -> None:
         self.outcomes = outcomes
         self.calls: list[str] = []
+        self.configs: list[dict] = []
 
-    def generate_content(self, model: str, contents: str) -> object:
+    def generate_content(self, model: str, contents: str, config: dict) -> object:
+        del contents
         self.calls.append(model)
+        self.configs.append(config)
         outcome = self.outcomes.pop(0)
         if isinstance(outcome, Exception):
             raise outcome
         return outcome
+
+    def generate_content_stream(self, model: str, contents: str, config: dict):
+        del contents
+        self.calls.append(model)
+        self.configs.append(config)
+        outcome = self.outcomes.pop(0)
+        if isinstance(outcome, Exception):
+            raise outcome
+        yield from outcome
 
 
 class GeminiProviderTests(unittest.TestCase):
@@ -46,6 +58,31 @@ class GeminiProviderTests(unittest.TestCase):
 
         self.assertEqual(result, "generated tests")
         self.assertEqual(models.calls, ["gemini-3.5-flash", "gemini-3.1-flash-lite"])
+
+    def test_applies_configured_thinking_level(self) -> None:
+        models = FakeModels([types.SimpleNamespace(text="answer")])
+        provider = GeminiProvider(api_key="test-key", thinking_level="minimal", fallback_models=[])
+
+        with self._install_fake_sdk(models):
+            provider.generate("prompt")
+
+        self.assertEqual(
+            models.configs,
+            [{"thinking_config": {"thinking_level": "minimal"}}],
+        )
+
+    def test_streams_chunks_with_configured_thinking_level(self) -> None:
+        models = FakeModels([[
+            types.SimpleNamespace(text="Hello"),
+            types.SimpleNamespace(text=" world"),
+        ]])
+        provider = GeminiProvider(api_key="test-key", thinking_level="low", fallback_models=[])
+
+        with self._install_fake_sdk(models):
+            result = list(provider.stream("prompt"))
+
+        self.assertEqual(result, ["Hello", " world"])
+        self.assertEqual(models.configs[0]["thinking_config"]["thinking_level"], "low")
 
     def test_does_not_fallback_for_non_retryable_request_error(self) -> None:
         models = FakeModels([FakeGeminiError(400)])

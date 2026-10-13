@@ -249,6 +249,88 @@ export async function queryAI(payload: AIQueryRequest): Promise<AIQueryResponse>
   return response.data
 }
 
+export interface ChatStreamResult {
+  sessionId: string | null
+  markdown: string
+}
+
+interface ChatStreamEvent {
+  type: 'metadata' | 'delta' | 'done' | 'error'
+  sessionId?: string
+  text?: string
+  message?: string
+}
+
+export async function streamChatQuery(
+  payload: AIQueryRequest,
+  onDelta: (text: string) => void,
+  onSession: (sessionId: string) => void,
+): Promise<ChatStreamResult> {
+  const token = await accessTokenProvider()
+  const response = await fetch(`${apiBaseUrl}/ai/query/stream`, {
+    method: 'POST',
+    headers: {
+      Accept: 'application/x-ndjson',
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+    body: JSON.stringify(payload),
+  })
+
+  if (!response.ok) {
+    if (response.status === 401) await authenticationFailureHandler()
+    let message = `Chat request failed with status ${response.status}.`
+    try {
+      const body = await response.json() as APIErrorEnvelope & { detail?: string }
+      message = body.message || body.detail || message
+    } catch {
+      // Preserve the status-based message when the response is not JSON.
+    }
+    throw new Error(message)
+  }
+  if (!response.body) throw new Error('The browser did not receive a streaming response body.')
+
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+  let markdown = ''
+  let sessionId: string | null = null
+  let completed = false
+
+  const consume = (line: string) => {
+    if (!line.trim()) return
+    const event = JSON.parse(line) as ChatStreamEvent
+    if (event.sessionId) {
+      sessionId = event.sessionId
+      onSession(event.sessionId)
+    }
+    if (event.type === 'delta' && event.text) {
+      markdown += event.text
+      onDelta(event.text)
+    } else if (event.type === 'error') {
+      throw new Error(event.message || 'The AI response was interrupted.')
+    } else if (event.type === 'done') {
+      completed = true
+    }
+  }
+
+  while (true) {
+    const { value, done } = await reader.read()
+    buffer += decoder.decode(value, { stream: !done })
+    let newline = buffer.indexOf('\n')
+    while (newline >= 0) {
+      consume(buffer.slice(0, newline))
+      buffer = buffer.slice(newline + 1)
+      newline = buffer.indexOf('\n')
+    }
+    if (done) break
+  }
+  if (buffer.trim()) consume(buffer)
+  if (!completed) throw new Error('The AI response ended before completion.')
+
+  return { sessionId, markdown }
+}
+
 export async function getLatestChatSession(workspaceId: string): Promise<ChatSession | null> {
   try {
     return (await api.get<ChatSession>(`/workspaces/${workspaceId}/chat-sessions/latest`)).data

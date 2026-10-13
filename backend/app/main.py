@@ -233,10 +233,19 @@ prompt_builder_service = PromptBuilderService()
 impact_analysis_service = ImpactAnalysisService()
 chat_prompt_builder_service = ChatPromptBuilderService()
 documentation_prompt_builder_service = DocumentationPromptBuilderService()
-ai_provider = GeminiProvider()
-chat_capability = ChatCapability(ai_provider, chat_prompt_builder_service)
-test_generation_capability = TestGenerationCapability(ai_provider, context_builder_service, prompt_builder_service)
-documentation_capability = DocumentationCapability(ai_provider, documentation_prompt_builder_service)
+chat_ai_provider = GeminiProvider(
+    thinking_level=os.getenv("GEMINI_CHAT_THINKING_LEVEL", "minimal")
+)
+generation_ai_provider = GeminiProvider(
+    thinking_level=os.getenv("GEMINI_GENERATION_THINKING_LEVEL", "low")
+)
+chat_capability = ChatCapability(chat_ai_provider, chat_prompt_builder_service)
+test_generation_capability = TestGenerationCapability(
+    generation_ai_provider, context_builder_service, prompt_builder_service
+)
+documentation_capability = DocumentationCapability(
+    generation_ai_provider, documentation_prompt_builder_service
+)
 ai_service = AIService(chat_capability, test_generation_capability, documentation_capability)
 
 # ── Workspace directory ──────────────────────────────────────────────────────
@@ -263,7 +272,7 @@ runtime_manifest_service = RuntimeManifestService(
     runtime_manifest_persistence_service,
     DeterministicRuntimeManifestAnalyzer(
         fallback=(
-            StructuredAIRuntimeManifestFallback(ai_provider)
+            StructuredAIRuntimeManifestFallback(generation_ai_provider)
             if os.getenv("RUNTIME_MANIFEST_AI_FALLBACK", "true").lower() == "true"
             else None
         ),
@@ -918,6 +927,95 @@ def latest_chat_session(
     if session is None:
         raise HTTPException(status_code=404, detail="No chat session exists for this workspace.")
     return session
+
+
+@app.post("/ai/query/stream")
+def stream_ai_query(
+    payload: QueryRequest,
+    principal: Principal = Depends(auth.active_principal),
+):
+    """Stream chat responses as newline-delimited JSON events."""
+    if payload.type != "chat":
+        raise HTTPException(status_code=400, detail="Streaming is only supported for chat queries.")
+    if not payload.query:
+        raise HTTPException(status_code=400, detail="query is required for type=chat")
+
+    _require_feature("ai_generation")
+    _, repository_metadata = _load_workspace(payload.workspaceId, principal)
+    rate_decision = rate_limit_guard.enforce(principal, "project_chat")
+
+    if payload.sessionId:
+        chat_session = chat_persistence_service.get(
+            payload.sessionId, principal.user_id, payload.workspaceId,
+        )
+    else:
+        chat_session = chat_persistence_service.create(principal.user_id, payload.workspaceId)
+    history = chat_persistence_service.context(
+        chat_session.id, principal.user_id, payload.workspaceId,
+    )
+    _, chunks = ai_service.stream_chat(repository_metadata, payload.query, history)
+
+    def event(payload: dict) -> str:
+        return json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n"
+
+    def stream_events():
+        yield event({"type": "metadata", "sessionId": chat_session.id})
+        answer_parts: list[str] = []
+        try:
+            for chunk in chunks:
+                answer_parts.append(chunk)
+                yield event({"type": "delta", "text": chunk})
+
+            markdown = "".join(answer_parts)
+            if not markdown:
+                raise RuntimeError("The AI provider returned an empty response.")
+            chat_persistence_service.append_exchange(
+                chat_session.id,
+                principal.user_id,
+                payload.workspaceId,
+                payload.query,
+                markdown,
+            )
+            admin_service.record_usage(principal.user_id, "ai_request")
+            telemetry.capture(principal.user_id, "chat_message", {
+                "workspace_id": payload.workspaceId,
+                "query_length": len(payload.query),
+                "streamed": True,
+            })
+            yield event({"type": "done", "sessionId": chat_session.id})
+        except AIProviderUnavailableError as exc:
+            try:
+                admin_service.record_log(
+                    "runtime", str(exc), code="AI_PROVIDER_UNAVAILABLE", user_id=principal.user_id,
+                )
+            except Exception:
+                pass
+            yield event({"type": "error", "message": str(exc)})
+        except Exception:
+            try:
+                admin_service.record_log(
+                    "runtime",
+                    "The streamed AI query failed.",
+                    code="AI_STREAM_FAILED",
+                    user_id=principal.user_id,
+                )
+            except Exception:
+                pass
+            yield event({
+                "type": "error",
+                "message": "The AI response was interrupted. Please try again.",
+            })
+
+    headers = {
+        **rate_decision.headers,
+        "Cache-Control": "no-cache, no-transform",
+        "X-Accel-Buffering": "no",
+    }
+    return StreamingResponse(
+        stream_events(),
+        media_type="application/x-ndjson",
+        headers=headers,
+    )
 
 
 @app.post("/ai/query", response_model=QueryResponse)

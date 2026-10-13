@@ -1,7 +1,7 @@
 import { computed, ref, watch } from 'vue'
 import { defineStore } from 'pinia'
 import posthog from 'posthog-js'
-import { analyzeImpact, extractAPIError, generateTests, getLatestChatSession, queryAI } from '../services/api'
+import { analyzeImpact, extractAPIError, generateTests, getLatestChatSession, streamChatQuery } from '../services/api'
 import { useWorkspaceStore } from './workspace'
 import { useFeatureFlagStore } from './features'
 import type { AIQueryResponse, ChatMessage, ImpactAnalysisResponse } from '../types/api'
@@ -78,6 +78,7 @@ export const useGenerationStore = defineStore('generation', () => {
     result.value = null
     genericQuery.value = ''
     const pendingId = `pending-${crypto.randomUUID()}`
+    const assistantId = `assistant-${crypto.randomUUID()}`
     chatMessages.value.push({
       id: pendingId,
       role: 'user',
@@ -90,23 +91,43 @@ export const useGenerationStore = defineStore('generation', () => {
         workspace_id: workspaceId,
         query_length: queryText.length,
       })
-      const response = await queryAI({
+      let assistantStarted = false
+      const streamed = await streamChatQuery(
+        {
+          type: 'chat',
+          workspaceId,
+          query: queryText,
+          sessionId: chatSessionId.value,
+        },
+        (delta) => {
+          if (!assistantStarted) {
+            assistantStarted = true
+            chatMessages.value.push({
+              id: assistantId,
+              role: 'assistant',
+              content: '',
+              createdAt: new Date().toISOString(),
+            })
+          }
+          const message = chatMessages.value.find((item) => item.id === assistantId)
+          if (message) message.content += delta
+        },
+        (sessionId) => { chatSessionId.value = sessionId },
+      )
+      chatSessionId.value = streamed.sessionId || chatSessionId.value
+      const response: AIQueryResponse = {
         type: 'chat',
         workspaceId,
-        query: queryText,
+        prompt: '',
+        markdown: streamed.markdown,
         sessionId: chatSessionId.value,
-      })
-      chatSessionId.value = response.sessionId || chatSessionId.value
-      chatMessages.value.push({
-        id: `assistant-${crypto.randomUUID()}`,
-        role: 'assistant',
-        content: response.markdown,
-        createdAt: new Date().toISOString(),
-      })
+      }
       result.value = response
       return response
     } catch (caughtError) {
-      chatMessages.value = chatMessages.value.filter((message) => message.id !== pendingId)
+      chatMessages.value = chatMessages.value.filter(
+        (message) => message.id !== pendingId && message.id !== assistantId,
+      )
       error.value = extractMessage(caughtError, 'Failed to run query.')
       return null
     } finally {
