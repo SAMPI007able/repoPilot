@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { onMounted, ref, watch } from 'vue'
 import type { WorkspaceListItem } from '../stores/workspace'
-import { ChevronLeft, ChevronRight, FolderGit2, GitBranch, LoaderCircle, Trash2 } from '@lucide/vue'
+import { ChevronLeft, ChevronRight, FolderGit2, GitBranch, LoaderCircle, RefreshCw, Trash2 } from '@lucide/vue'
 
 const SIDEBAR_STORAGE_KEY = 'testforge.sidebar.collapsed'
 
@@ -18,6 +18,7 @@ const emit = defineEmits<{
   (e: 'remove', id: string): void
   (e: 'new'): void
   (e: 'repositories'): void
+  (e: 'refresh'): void
 }>()
 
 const collapsed = ref(false)
@@ -89,6 +90,16 @@ const statusMap = {
 
     <div class="sidebar__section">
       <div class="section-title">Workspaces</div>
+      <button
+        class="sidebar__refresh"
+        type="button"
+        aria-label="Refresh workspaces"
+        title="Refresh workspaces"
+        :disabled="loading"
+        @click="emit('refresh')"
+      >
+        <RefreshCw :class="{ 'sidebar__refresh-icon--spinning': loading }" aria-hidden="true" />
+      </button>
     </div>
 
     <div class="sidebar__list scrollbar-thin">

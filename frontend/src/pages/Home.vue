@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onUnmounted, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import Landing from '../components/Landing.vue'
 import SignInModal from '../components/SignInModal.vue'
@@ -21,30 +21,19 @@ const signInOpen = ref(false)
 const repositoriesPage = computed(() => route.name === 'repositories')
 const pendingBuildKey = 'testforge.pendingWorkspaceBuild'
 
-let workspaceRefreshTimer: number | null = null
-
-function startWorkspaceRefresh() {
-  if (workspaceRefreshTimer !== null) return
-  void workspaceStore.loadWorkspaces()
-  workspaceRefreshTimer = window.setInterval(() => {
-    void workspaceStore.loadWorkspaces(false)
-  }, 2000)
-}
-
-function stopWorkspaceRefresh() {
-  if (workspaceRefreshTimer === null) return
-  window.clearInterval(workspaceRefreshTimer)
-  workspaceRefreshTimer = null
+function refreshWorkspacesIfStale() {
+  if (auth.authenticated && document.visibilityState === 'visible') {
+    void workspaceStore.refreshWorkspacesIfStale()
+  }
 }
 
 watch(() => auth.authenticated, async (authenticated) => {
   if (!authenticated) {
-    stopWorkspaceRefresh()
     workspaceStore.clearSession()
     return
   }
 
-  startWorkspaceRefresh()
+  void workspaceStore.loadWorkspaces()
   const pendingRepositoryUrl = window.sessionStorage.getItem(pendingBuildKey)
   if (pendingRepositoryUrl) {
     window.sessionStorage.removeItem(pendingBuildKey)
@@ -53,8 +42,14 @@ watch(() => auth.authenticated, async (authenticated) => {
   }
 }, { immediate: true })
 
+onMounted(() => {
+  window.addEventListener('focus', refreshWorkspacesIfStale)
+  document.addEventListener('visibilitychange', refreshWorkspacesIfStale)
+})
+
 onUnmounted(() => {
-  stopWorkspaceRefresh()
+  window.removeEventListener('focus', refreshWorkspacesIfStale)
+  document.removeEventListener('visibilitychange', refreshWorkspacesIfStale)
 })
 
 async function signOut() {
@@ -133,6 +128,7 @@ async function importRepository(repository: import('../types/api').ProviderRepos
       :active-section="repositoriesPage ? 'repositories' : 'workspace'"
       @select="selectWorkspace"
       @remove="workspaceStore.removeWorkspace"
+      @refresh="workspaceStore.loadWorkspaces()"
       @new="startNewWorkspace"
       @repositories="showRepositories"
     />

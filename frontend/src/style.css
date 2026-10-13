@@ -290,8 +290,43 @@ button {
 }
 
 .sidebar__section {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   margin-top: 1rem;
   padding: 0 1.25rem;
+}
+
+.sidebar__refresh {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 0.375rem;
+  background: transparent;
+  padding: 0.25rem;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.sidebar__refresh:hover:not(:disabled),
+.sidebar__refresh:focus-visible {
+  color: var(--text);
+  background: rgb(255 255 255 / 6%);
+}
+
+.sidebar__refresh:disabled {
+  cursor: default;
+  opacity: 0.7;
+}
+
+.sidebar__refresh svg {
+  width: 0.875rem;
+  height: 0.875rem;
+}
+
+.sidebar__refresh-icon--spinning {
+  animation: spin 900ms linear infinite;
 }
 
 .sidebar__list {
