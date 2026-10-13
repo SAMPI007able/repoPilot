@@ -5,6 +5,7 @@ import App from './App.vue'
 import router from './router'
 import { useAuthStore } from './stores/auth'
 import { useFeatureFlagStore } from './stores/features'
+import { inject } from '@vercel/analytics'
 import './style.css'
 
 const app = createApp(App)
@@ -35,3 +36,5 @@ router.beforeEach(async (to) => {
   return true
 })
 app.mount('#app')
+// Initialize Vercel Analytics
+inject()

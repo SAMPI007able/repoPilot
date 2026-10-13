@@ -64,7 +64,7 @@ VITE_POSTHOG_HOST=https://us.i.posthog.com
 Do not put database, Redis, AWS, Gemini, encryption, OAuth client-secret, or
 other backend credentials in a `VITE_*` variable.
 
-## Railway or Fly backend variables
+## Railway backend variables
 
 The repository root contains a production backend `Dockerfile`, so an existing
 Railway service connected to the monorepo root will use Docker instead of asking
