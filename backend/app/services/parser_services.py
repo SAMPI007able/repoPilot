@@ -46,7 +46,16 @@ class ParserService:
         for file_path, relative_path in files:
             if not os.path.isfile(file_path):
                 raise FileNotFoundError(f"Cannot parse missing file: {file_path}")
-            manifest.append({"file_path": os.path.abspath(file_path), "relative_path": relative_path})
+            repository_root = os.path.abspath(file_path)
+            for _ in relative_path.replace("\\", "/").split("/"):
+                repository_root = os.path.dirname(repository_root)
+            manifest.append(
+                {
+                    "file_path": os.path.abspath(file_path),
+                    "relative_path": relative_path,
+                    "repository_root": repository_root,
+                }
+            )
 
         if not manifest:
             return []
@@ -124,6 +133,7 @@ class ParserService:
                 )
                 for import_reference in raw_metadata.get("imports", [])
             ],
+            complexity=max(int(raw_metadata.get("complexity", 1)), 1),
         )
 
     def _decode_output(self, output: bytes | None) -> str:

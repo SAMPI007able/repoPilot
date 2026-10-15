@@ -3,9 +3,9 @@ import time
 import unittest
 import os
 import shutil
-from unittest.mock import Mock
+from unittest.mock import ANY, Mock
 
-from app.models.code_models import RepositoryMetadata, RepositoryStatistics
+from app.models.code_models import RepositoryMetadata, RepositoryStatistics, WorkspaceBuildJob
 from app.persistence.artifact_store import LocalArtifactStore
 from app.persistence.database import Database
 from app.persistence.workspace_persistence_service import WorkspacePersistenceService
@@ -21,6 +21,7 @@ class WorkspaceBuildServiceTests(unittest.TestCase):
         repository_service.extract_repo_name.return_value = "example"
         repository_service.clone_repository.side_effect = lambda _url, path: os.makedirs(path)
         repository_service.get_commit_sha.return_value = "abc123"
+        repository_service.get_current_branch.return_value = "main"
         repository_service.delete_repository.side_effect = lambda path: shutil.rmtree(path)
         repository_indexer = Mock(spec=RepositoryIndexerService)
         expected_metadata = RepositoryMetadata(
@@ -69,6 +70,9 @@ class WorkspaceBuildServiceTests(unittest.TestCase):
                         self.fail("Background workspace build did not complete")
                     time.sleep(0.01)
                     completed_job = service.get_job(started_job.jobId)
+                completed_workspace = persistence_service.get_workspace_summary(
+                    started_job.workspaceId
+                )
             finally:
                 service.shutdown()
                 database.close()
@@ -78,6 +82,7 @@ class WorkspaceBuildServiceTests(unittest.TestCase):
             self.assertEqual(completed_job.metadata.repository, "example")
             self.assertTrue(all(stage.status == "completed" for stage in completed_job.stages))
             self.assertEqual(os.listdir(os.path.join(workspace_dir, "checkouts")), [])
+            self.assertEqual(completed_workspace.indexedBranch, "main")
 
     def test_cleanup_failure_is_reported_and_does_not_leave_build_locked(self) -> None:
         repository_service = Mock(spec=RepositoryService)
@@ -85,6 +90,7 @@ class WorkspaceBuildServiceTests(unittest.TestCase):
         repository_service.extract_repo_name.return_value = "example"
         repository_service.clone_repository.side_effect = lambda _url, path: os.makedirs(path)
         repository_service.get_commit_sha.return_value = "abc123"
+        repository_service.get_current_branch.return_value = "main"
         repository_service.delete_repository.side_effect = OSError("checkout is locked")
         repository_indexer = Mock(spec=RepositoryIndexerService)
         repository_indexer.index_repository_parallel.return_value = RepositoryMetadata(
@@ -129,6 +135,76 @@ class WorkspaceBuildServiceTests(unittest.TestCase):
             finally:
                 service.shutdown()
                 database.close()
+
+    def test_reindex_reuses_workspace_and_switches_branch(self) -> None:
+        repository_service = Mock(spec=RepositoryService)
+        repository_service.validate_public_repository_url.side_effect = lambda url: url
+        repository_service.extract_repo_name.return_value = "example"
+        repository_service.clone_repository.side_effect = (
+            lambda _url, path, authorization=None, branch=None: os.makedirs(path)
+        )
+        repository_service.get_commit_sha.return_value = "def456"
+        repository_service.get_current_branch.return_value = "feature/new-graph"
+        repository_service.delete_repository.side_effect = lambda path: shutil.rmtree(path)
+        repository_indexer = Mock(spec=RepositoryIndexerService)
+        repository_indexer.index_repository_parallel.return_value = RepositoryMetadata(
+            repository="example",
+            statistics=RepositoryStatistics(files=1, typescript=1, javascript=0),
+        )
+
+        with tempfile.TemporaryDirectory() as workspace_dir:
+            database = Database(f"sqlite:///{os.path.join(workspace_dir, 'test.db')}")
+            database.create_schema()
+            persistence_service = WorkspacePersistenceService(
+                database,
+                LocalArtifactStore(os.path.join(workspace_dir, "artifacts")),
+            )
+            workspace = persistence_service.create_workspace(
+                "https://github.com/example/example", "example", branch="main"
+            )
+            initial_job = WorkspaceBuildJob(
+                jobId="initial-job",
+                workspaceId=workspace.id,
+                status="completed",
+                stages=[],
+            )
+            persistence_service.create_build(initial_job)
+            persistence_service.complete_build(
+                initial_job,
+                RepositoryMetadata(
+                    repository="example",
+                    statistics=RepositoryStatistics(files=0, typescript=0, javascript=0),
+                ),
+                "abc123",
+                "main",
+            )
+            service = WorkspaceBuildService(
+                repository_service,
+                repository_indexer,
+                os.path.join(workspace_dir, "checkouts"),
+                persistence_service,
+                max_parallel_jobs=1,
+                parse_workers=1,
+            )
+            try:
+                started = service.start_reindex(
+                    workspace.id, None, branch="feature/new-graph"
+                )
+                completed = self._wait_for_job(service, started.jobId)
+                summary = persistence_service.get_workspace_summary(workspace.id)
+            finally:
+                service.shutdown()
+                database.close()
+
+        self.assertEqual(completed.status, "completed")
+        self.assertEqual(completed.workspaceId, workspace.id)
+        self.assertEqual(summary.indexedBranch, "feature/new-graph")
+        repository_service.clone_repository.assert_called_with(
+            "https://github.com/example/example",
+            ANY,
+            authorization=None,
+            branch="feature/new-graph",
+        )
 
     def _wait_for_job(
         self,

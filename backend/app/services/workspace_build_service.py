@@ -67,7 +67,9 @@ class WorkspaceBuildService:
                         f"Repository '{git_url}' is already being built."
                     )
 
-            workspace = self.persistence_service.create_workspace(git_url, repository_name, owner_user_id)
+            workspace = self.persistence_service.create_workspace(
+                git_url, repository_name, owner_user_id, branch=branch
+            )
             job = WorkspaceBuildJob(
                 jobId=uuid.uuid4().hex,
                 workspaceId=workspace.id,
@@ -84,8 +86,75 @@ class WorkspaceBuildService:
                 documents or [],
                 clone_authorization,
                 branch,
+                [],
+                False,
             )
             return job.model_copy(deep=True)
+
+    def start_reindex(
+        self,
+        workspace_id: str,
+        owner_user_id: str | None,
+        branch: str | None = None,
+        clone_authorization: str | None = None,
+    ) -> WorkspaceBuildJob:
+        workspace = self.persistence_service.get_workspace_summary(workspace_id, owner_user_id)
+        if workspace is None:
+            raise LookupError(workspace_id)
+        selected_branch = branch or workspace.indexedBranch
+        metadata = self.persistence_service.load_metadata(workspace_id)
+        preserved_documents = [
+            document
+            for document in (metadata.documentation if metadata else [])
+            if document.path.startswith("project_docs/")
+        ]
+
+        with self._lock:
+            if any(
+                job.workspaceId == workspace_id and job.status in {"queued", "running"}
+                for job in self._jobs.values()
+            ):
+                raise WorkspaceBuildAlreadyRunningError(
+                    f"Workspace '{workspace_id}' is already being indexed."
+                )
+            build_key = self._build_key(workspace.repoUrl, selected_branch)
+            if build_key in self._active_by_workspace:
+                raise WorkspaceBuildAlreadyRunningError(
+                    f"Repository '{workspace.repoUrl}' is already being built."
+                )
+            job = WorkspaceBuildJob(
+                jobId=uuid.uuid4().hex,
+                workspaceId=workspace_id,
+                stages=self._create_stages(),
+            )
+            self._jobs[job.jobId] = job
+            self._active_by_workspace[build_key] = job.jobId
+            self.persistence_service.create_build(job)
+            self._executor.submit(
+                self._run_build,
+                job.jobId,
+                workspace.repoUrl,
+                workspace.repoName,
+                [],
+                clone_authorization,
+                selected_branch,
+                preserved_documents,
+                True,
+            )
+            return job.model_copy(deep=True)
+
+    def get_workspace_summary(self, workspace_id: str, owner_user_id: str | None = None):
+        return self.persistence_service.get_workspace_summary(workspace_id, owner_user_id)
+
+    def list_branches(
+        self, workspace_id: str, owner_user_id: str, clone_authorization: str | None = None
+    ) -> list[str]:
+        workspace = self.persistence_service.get_workspace_summary(workspace_id, owner_user_id)
+        if workspace is None:
+            raise LookupError(workspace_id)
+        return self.repository_service.list_remote_branches(
+            workspace.repoUrl, authorization=clone_authorization
+        )
 
     def get_job(self, job_id: str, owner_user_id: str | None = None) -> WorkspaceBuildJob | None:
         return self.persistence_service.get_build(job_id, owner_user_id=owner_user_id)
@@ -122,6 +191,8 @@ class WorkspaceBuildService:
         documents: list[tuple[str, bytes]],
         clone_authorization: str | None,
         branch: str | None,
+        preserved_documents: list[DocumentationAsset],
+        is_reindex: bool,
     ) -> None:
         workspace_id = self._jobs[job_id].workspaceId
         temporary_root: str | None = None
@@ -142,7 +213,9 @@ class WorkspaceBuildService:
             else:
                 self.repository_service.clone_repository(git_url, destination_path)
             uploaded_docs = self._save_project_documents(destination_path, documents)
+            uploaded_docs.extend(preserved_documents)
             commit_sha = self.repository_service.get_commit_sha(destination_path)
+            indexed_branch = self.repository_service.get_current_branch(destination_path) or branch
             self._update_stage(job_id, "clone", "completed")
 
             metadata = self.repository_indexer.index_repository_parallel(
@@ -164,6 +237,7 @@ class WorkspaceBuildService:
                 completed_job,
                 metadata,
                 commit_sha,
+                indexed_branch,
             )
             artifact_persisted = True
         except Exception as exc:
@@ -175,7 +249,9 @@ class WorkspaceBuildService:
                     if stage.status == "running":
                         stage.status = "failed"
                 failed_job = job.model_copy(deep=True)
-            self.persistence_service.fail_build(failed_job)
+            self.persistence_service.fail_build(
+                failed_job, preserve_ready_on_failure=is_reindex
+            )
         finally:
             cleanup_error: Exception | None = None
             try:
@@ -205,7 +281,9 @@ class WorkspaceBuildService:
                         else cleanup_message
                     )
                     failed_job = job.model_copy(deep=True)
-                self.persistence_service.fail_build(failed_job)
+                self.persistence_service.fail_build(
+                    failed_job, preserve_ready_on_failure=is_reindex
+                )
 
     @staticmethod
     def _build_key(git_url: str, branch: str | None) -> str:

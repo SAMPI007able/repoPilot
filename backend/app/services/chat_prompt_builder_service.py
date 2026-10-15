@@ -36,6 +36,8 @@ class ChatPromptBuilderService:
                 f"Total indexed files: {repository_metadata.statistics.files}",
                 f"TypeScript files: {repository_metadata.statistics.typescript}",
                 f"JavaScript files: {repository_metadata.statistics.javascript}",
+                f"Python files: {repository_metadata.statistics.python}",
+                f"Java files: {repository_metadata.statistics.java}",
                 f"Test framework: {repository_metadata.testFramework or 'unknown'}",
                 "",
                 "--- Package Intelligence ---",

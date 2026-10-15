@@ -55,3 +55,22 @@ class ImportRepositoryRequest(BaseModel):
         ):
             raise ValueError("branch is not a safe Git branch name")
         return self
+
+
+class ReindexWorkspaceRequest(BaseModel):
+    branch: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=255,
+        pattern=r"^[A-Za-z0-9_][A-Za-z0-9._/-]*$",
+    )
+
+    @model_validator(mode="after")
+    def validate_branch(self):
+        if self.branch and (
+            ".." in self.branch
+            or "@{" in self.branch
+            or self.branch.endswith((".", "/"))
+        ):
+            raise ValueError("branch is not a safe Git branch name")
+        return self

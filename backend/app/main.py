@@ -9,6 +9,7 @@ import uuid
 import asyncio
 import json
 import hashlib
+import urllib.parse
 
 from app.models.code_models import (
     ImpactAnalysisResult,
@@ -49,7 +50,7 @@ from app.models.admin_models import (
 )
 from app.models.integration_models import (
     ImportRepositoryRequest, OAuthConnectResponse, ProviderConnection,
-    ProviderRepository, RepositoryContent,
+    ProviderRepository, RepositoryContent, ReindexWorkspaceRequest,
 )
 from app.persistence.identity_persistence_service import IdentityPersistenceService
 from app.persistence.chat_persistence_service import ChatPersistenceService, ChatSessionNotFoundError
@@ -384,6 +385,26 @@ def _authorize_workspace(workspace_id: str, principal: Principal) -> None:
         raise HTTPException(status_code=404, detail=f"Workspace '{workspace_id}' was not found.")
 
 
+def _repository_clone_token(repository_url: str, principal: Principal) -> str | None:
+    hostname = (urllib.parse.urlsplit(repository_url).hostname or "").lower()
+    provider_by_hostname = {
+        "github.com": "github",
+        "www.github.com": "github",
+        "gitlab.com": "gitlab",
+        "bitbucket.org": "bitbucket",
+    }
+    provider = provider_by_hostname.get(hostname)
+    if not provider:
+        return None
+    connection = next(
+        (item for item in oauth_integration_service.statuses(principal.user_id) if item.provider == provider),
+        None,
+    )
+    if not connection or not connection.connected:
+        return None
+    return oauth_integration_service.access_token(principal.user_id, provider)
+
+
 def _authorize_preview(preview_id: str, principal: Principal) -> None:
     if not preview_persistence_service.is_owned_by(preview_id, principal.user_id):
         raise PreviewLabAPIError(404, "PREVIEW_NOT_FOUND", "The preview was not found.")
@@ -518,10 +539,11 @@ def import_integration_repository(
             "repository_owner": payload.owner,
             "repository_name": payload.repo,
         })
+        selected_branch = payload.branch or repository.default_branch
         workspace = workspace_build_service.start_build(
             repository.clone_url, owner_user_id=principal.user_id,
             clone_authorization=token, trusted_provider_url=True,
-            branch=payload.branch,
+            branch=selected_branch,
         )
         telemetry.capture(principal.user_id, "repo_indexed", {
             "source": "integration_import",
@@ -596,6 +618,72 @@ def get_workspace(workspace_id: str, principal: Principal = Depends(auth.active_
     if workspace is None:
         raise HTTPException(status_code=404, detail=f"Workspace '{workspace_id}' was not found.")
     return workspace
+
+
+@app.get("/workspaces/{workspace_id}/branches", response_model=list[str])
+def list_workspace_branches(
+    workspace_id: str,
+    principal: Principal = Depends(auth.active_principal),
+):
+    _authorize_workspace(workspace_id, principal)
+    workspace = workspace_build_service.get_workspace_summary(workspace_id, principal.user_id)
+    if workspace is None:
+        raise HTTPException(status_code=404, detail=f"Workspace '{workspace_id}' was not found.")
+    try:
+        return workspace_build_service.list_branches(
+            workspace_id,
+            principal.user_id,
+            _repository_clone_token(workspace.repoUrl, principal),
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Failed to load repository branches: {exc}") from exc
+
+
+@app.post(
+    "/workspaces/{workspace_id}/reindex",
+    response_model=WorkspaceBuildJob,
+    status_code=202,
+)
+def reindex_workspace(
+    workspace_id: str,
+    payload: ReindexWorkspaceRequest,
+    response: Response,
+    principal: Principal = Depends(auth.active_principal),
+):
+    _authorize_workspace(workspace_id, principal)
+    workspace = workspace_build_service.get_workspace_summary(workspace_id, principal.user_id)
+    if workspace is None:
+        raise HTTPException(status_code=404, detail=f"Workspace '{workspace_id}' was not found.")
+    try:
+        token = _repository_clone_token(workspace.repoUrl, principal)
+        if payload.branch:
+            branches = workspace_build_service.list_branches(
+                workspace_id, principal.user_id, token
+            )
+            if payload.branch not in branches:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Branch '{payload.branch}' is not available in this repository.",
+                )
+        _apply_rate_headers(response, rate_limit_guard.enforce(principal, "repository_index"))
+        job = workspace_build_service.start_reindex(
+            workspace_id,
+            principal.user_id,
+            branch=payload.branch,
+            clone_authorization=token,
+        )
+        telemetry.capture(principal.user_id, "repo_reindexed", {
+            "workspace_id": workspace_id,
+            "repository_url": workspace.repoUrl,
+            "branch": payload.branch or workspace.indexedBranch,
+        })
+        return job
+    except HTTPException:
+        raise
+    except WorkspaceBuildAlreadyRunningError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to start re-index: {exc}") from exc
 
 
 def _raise_runtime_manifest_error(exc: Exception) -> None:

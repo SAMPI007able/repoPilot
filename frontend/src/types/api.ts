@@ -4,6 +4,7 @@ export interface ParsedFileSummary {
   functions: number
   imports: number
   existing_tests: number
+  complexity: number
 }
 
 export interface CurrentUser {
@@ -54,6 +55,8 @@ export interface RepositoryStatistics {
   files: number
   typescript: number
   javascript: number
+  python: number
+  java: number
 }
 
 export interface PackageInfo {
@@ -230,6 +233,7 @@ export interface PersistedWorkspaceSummary {
   jobId: string | null
   repoUrl: string
   repoName: string
+  indexedBranch: string | null
   status: 'queued' | 'running' | 'ready' | 'failed'
   statistics: RepositoryStatistics
   stages: WorkspaceBuildStage[]

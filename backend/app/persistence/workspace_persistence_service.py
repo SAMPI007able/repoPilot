@@ -40,13 +40,18 @@ class WorkspacePersistenceService:
         self.artifact_codec = artifact_codec or RepositoryArtifactCodec()
 
     def create_workspace(
-        self, repo_url: str, repo_name: str, owner_user_id: str | None = None
+        self,
+        repo_url: str,
+        repo_name: str,
+        owner_user_id: str | None = None,
+        branch: str | None = None,
     ) -> WorkspaceSummary:
         workspace = WorkspaceRow(
             id=str(uuid.uuid4()),
             owner_user_id=owner_user_id,
             repo_url=repo_url,
             repo_name=repo_name,
+            default_branch=branch,
             status="queued",
         )
         with self.database.session() as session:
@@ -62,8 +67,14 @@ class WorkspacePersistenceService:
         )
         with self.database.session() as session:
             session.add(build)
+            workspace = session.get(WorkspaceRow, job.workspaceId)
+            if workspace is None:
+                raise WorkspaceNotFoundError(job.workspaceId)
+            workspace.status = "queued"
+            workspace.error = None
+            workspace.updated_at = datetime.now(timezone.utc)
 
-    def update_build(self, job: WorkspaceBuildJob) -> None:
+    def update_build(self, job: WorkspaceBuildJob, preserve_ready_on_failure: bool = False) -> None:
         now = datetime.now(timezone.utc)
         with self.database.session() as session:
             build = session.get(WorkspaceBuildRow, job.jobId)
@@ -80,7 +91,11 @@ class WorkspacePersistenceService:
                 build.completed_at = now
 
             if job.status in {"queued", "running", "failed"}:
-                workspace.status = job.status
+                workspace.status = (
+                    "ready"
+                    if job.status == "failed" and preserve_ready_on_failure and workspace.active_artifact_id
+                    else job.status
+                )
                 workspace.error = job.error
                 workspace.updated_at = now
 
@@ -89,6 +104,7 @@ class WorkspacePersistenceService:
         job: WorkspaceBuildJob,
         metadata: RepositoryMetadata,
         commit_sha: str | None,
+        indexed_branch: str | None = None,
     ) -> None:
         artifact_id = str(uuid.uuid4())
         commit_segment = commit_sha or "working-tree"
@@ -126,6 +142,7 @@ class WorkspacePersistenceService:
                 session.add(artifact)
 
                 workspace.commit_sha = commit_sha
+                workspace.default_branch = indexed_branch
                 workspace.status = "ready"
                 workspace.stats = metadata.statistics.model_dump(mode="json")
                 workspace.package_info = (
@@ -162,8 +179,24 @@ class WorkspacePersistenceService:
             self.artifact_store.delete(storage_key)
             raise
 
-    def fail_build(self, job: WorkspaceBuildJob) -> None:
-        self.update_build(job)
+    def fail_build(self, job: WorkspaceBuildJob, preserve_ready_on_failure: bool = False) -> None:
+        self.update_build(job, preserve_ready_on_failure=preserve_ready_on_failure)
+
+    def get_workspace_summary(
+        self, workspace_id: str, owner_user_id: str | None = None
+    ) -> WorkspaceSummary | None:
+        with self.database.session() as session:
+            workspace = session.get(WorkspaceRow, workspace_id)
+            if workspace is None or (
+                owner_user_id is not None and workspace.owner_user_id != owner_user_id
+            ):
+                return None
+            latest_build = self._latest_build(session, workspace.id)
+            return self._to_summary(
+                workspace,
+                stages=self._build_stages(latest_build),
+                job_id=latest_build.id if latest_build else None,
+            )
 
     def get_build(
         self, job_id: str, include_metadata: bool = True, owner_user_id: str | None = None
@@ -289,7 +322,7 @@ class WorkspacePersistenceService:
                 build.completed_at = now
                 workspace = session.get(WorkspaceRow, build.workspace_id)
                 if workspace:
-                    workspace.status = "failed"
+                    workspace.status = "ready" if workspace.active_artifact_id else "failed"
                     workspace.error = build.error
                     workspace.updated_at = now
 
@@ -323,9 +356,11 @@ class WorkspacePersistenceService:
             jobId=job_id,
             repoUrl=workspace.repo_url,
             repoName=workspace.repo_name,
+            indexedBranch=workspace.default_branch,
             status=workspace.status,
             statistics=RepositoryStatistics.model_validate(
-                workspace.stats or {"files": 0, "typescript": 0, "javascript": 0}
+                workspace.stats
+                or {"files": 0, "typescript": 0, "javascript": 0, "python": 0, "java": 0}
             ),
             stages=stages or [],
             error=workspace.error,

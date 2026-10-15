@@ -160,6 +160,19 @@ export async function getPersistedWorkspace(workspaceId: string): Promise<Persis
   return response.data
 }
 
+export async function listWorkspaceBranches(workspaceId: string): Promise<string[]> {
+  return (await api.get<string[]>(`/workspaces/${workspaceId}/branches`)).data
+}
+
+export async function reindexPersistedWorkspace(
+  workspaceId: string,
+  branch?: string,
+): Promise<WorkspaceBuildJob> {
+  return (await api.post<WorkspaceBuildJob>(`/workspaces/${workspaceId}/reindex`, {
+    branch: branch || null,
+  })).data
+}
+
 export async function deletePersistedWorkspace(workspaceId: string): Promise<void> {
   await api.delete(`/workspaces/${workspaceId}`)
 }

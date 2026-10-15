@@ -94,6 +94,25 @@ class RepositoryServiceAuthTests(unittest.TestCase):
                     environment["GIT_CONFIG_VALUE_0"],
                 )
 
+    @patch("app.services.repository_services.subprocess.run")
+    def test_remote_branch_listing_returns_sorted_head_names(self, run) -> None:
+        run.return_value.stdout = (
+            "abc\trefs/heads/release/v2\n"
+            "def\trefs/heads/main\n"
+            "ghi\trefs/tags/v1\n"
+        )
+
+        branches = RepositoryService().list_remote_branches(
+            "https://github.com/acme/repository.git", authorization="token"
+        )
+
+        self.assertEqual(branches, ["main", "release/v2"])
+        self.assertEqual(
+            run.call_args.args[0],
+            ["git", "ls-remote", "--heads", "https://github.com/acme/repository.git"],
+        )
+        self.assertEqual(run.call_args.kwargs["env"]["GIT_TERMINAL_PROMPT"], "0")
+
 
 if __name__ == "__main__":
     unittest.main()
