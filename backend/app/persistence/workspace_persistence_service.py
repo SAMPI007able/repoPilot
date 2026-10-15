@@ -1,3 +1,4 @@
+import logging
 import uuid
 from datetime import datetime, timezone
 
@@ -15,9 +16,12 @@ from app.persistence.artifact_codec import (
     ARTIFACT_SCHEMA_VERSION,
     RepositoryArtifactCodec,
 )
-from app.persistence.artifact_store import ArtifactStore
+from app.persistence.artifact_store import ArtifactNotFoundError, ArtifactStore
 from app.persistence.database import Database
 from app.persistence.models import ArtifactRow, WorkspaceBuildRow, WorkspaceRow
+
+
+logger = logging.getLogger(__name__)
 
 
 class WorkspaceNotFoundError(LookupError):
@@ -235,7 +239,16 @@ class WorkspacePersistenceService:
             storage_key = artifact.storage_key
             checksum = artifact.checksum_sha256
 
-        contents = self.artifact_store.get(storage_key)
+        try:
+            contents = self.artifact_store.get(storage_key)
+        except ArtifactNotFoundError:
+            # The database outlived its artifact storage (e.g. ephemeral local disk after a
+            # redeploy). Treat the index as absent so the workspace can be re-indexed.
+            logger.warning(
+                "Repository index artifact %s for workspace %s is missing from storage.",
+                storage_key, workspace_id,
+            )
+            return None
         return self.artifact_codec.decode(contents, expected_checksum=checksum)
 
     def list_workspaces(self, owner_user_id: str | None = None) -> list[WorkspaceSummary]:

@@ -1,4 +1,5 @@
 import os
+import shutil
 import tempfile
 import unittest
 
@@ -143,6 +144,26 @@ class WorkspacePersistenceServiceTests(unittest.TestCase):
             ]
             self.assertEqual(remaining_artifacts, [])
             restarted_database.close()
+            database.close()
+
+    def test_missing_artifact_after_redeploy_is_treated_as_absent_index(self) -> None:
+        with tempfile.TemporaryDirectory() as data_dir:
+            database = Database(f"sqlite:///{os.path.join(data_dir, 'test.db')}")
+            database.create_schema()
+            artifact_root = os.path.join(data_dir, "artifacts")
+            service = WorkspacePersistenceService(database, LocalArtifactStore(artifact_root))
+            workspace = service.create_workspace("https://github.com/example/example", "example")
+            job = WorkspaceBuildJob(jobId="job-id", workspaceId=workspace.id, status="completed", stages=[])
+            service.create_build(job)
+            service.complete_build(job, create_metadata(), "abc123")
+
+            # Simulate an ephemeral container disk being wiped while the database survives.
+            shutil.rmtree(artifact_root)
+            restarted_service = WorkspacePersistenceService(database, LocalArtifactStore(artifact_root))
+
+            self.assertIsNone(restarted_service.load_metadata(workspace.id))
+            self.assertIsNone(restarted_service.get_workspace(workspace.id))
+            self.assertEqual(restarted_service.list_workspaces()[0].id, workspace.id)
             database.close()
 
 

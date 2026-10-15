@@ -3,6 +3,10 @@ from pathlib import Path
 from typing import Protocol
 
 
+class ArtifactNotFoundError(FileNotFoundError):
+    """Raised by every artifact store when a key has no stored object."""
+
+
 class ArtifactStore(Protocol):
     def put(self, key: str, contents: bytes, content_type: str) -> None: ...
 
@@ -25,7 +29,10 @@ class LocalArtifactStore:
         temporary_path.replace(artifact_path)
 
     def get(self, key: str) -> bytes:
-        return self._resolve_key(key).read_bytes()
+        try:
+            return self._resolve_key(key).read_bytes()
+        except FileNotFoundError as exc:
+            raise ArtifactNotFoundError(key) from exc
 
     def delete(self, key: str) -> None:
         artifact_path = self._resolve_key(key)
@@ -71,7 +78,10 @@ class S3ArtifactStore:
         )
 
     def get(self, key: str) -> bytes:
-        response = self.client.get_object(Bucket=self.bucket, Key=key)
+        try:
+            response = self.client.get_object(Bucket=self.bucket, Key=key)
+        except self.client.exceptions.NoSuchKey as exc:
+            raise ArtifactNotFoundError(key) from exc
         return response["Body"].read()
 
     def delete(self, key: str) -> None:
