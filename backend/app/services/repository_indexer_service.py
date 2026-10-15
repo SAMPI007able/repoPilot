@@ -180,6 +180,7 @@ class RepositoryIndexerService:
             functions=len(parsed_file.functions),
             imports=len(parsed_file.imports),
             existing_tests=len(parsed_file.existing_tests),
+            complexity=parsed_file.complexity,
         )
 
     def _attach_existing_tests(self, parsed_files: list[ParsedFile]) -> None:

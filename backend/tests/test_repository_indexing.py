@@ -1,3 +1,4 @@
+import json
 import os
 import tempfile
 import unittest
@@ -28,6 +29,80 @@ class ParserServiceTests(unittest.TestCase):
         self.assertEqual([parsed.path for parsed in parsed_files], ["first.ts", "second.ts"])
         self.assertEqual(parsed_files[0].functions[0].name, "first")
         self.assertEqual(parsed_files[1].classes[0].name, "Second")
+
+    def test_parse_many_resolves_tsconfig_path_aliases(self) -> None:
+        with tempfile.TemporaryDirectory() as repo_path:
+            source_path = os.path.join(repo_path, "src")
+            os.makedirs(source_path)
+            with open(os.path.join(repo_path, "tsconfig.json"), "w", encoding="utf-8") as config_file:
+                json.dump(
+                    {"compilerOptions": {"baseUrl": ".", "paths": {"@app/*": ["src/*"]}}},
+                    config_file,
+                )
+            main_path = os.path.join(source_path, "main.ts")
+            helper_path = os.path.join(source_path, "helper.ts")
+            with open(main_path, "w", encoding="utf-8") as source_file:
+                source_file.write("import { helper } from '@app/helper'; helper();")
+            with open(helper_path, "w", encoding="utf-8") as source_file:
+                source_file.write("export function helper() { return true; }")
+
+            parsed_files = ParserService().parse_many(
+                [(main_path, "src/main.ts"), (helper_path, "src/helper.ts")]
+            )
+
+        self.assertEqual(parsed_files[0].imports[0].kind, "local")
+        self.assertEqual(parsed_files[0].imports[0].resolved, "src/helper.ts")
+
+    def test_parse_many_resolves_workspace_package_imports(self) -> None:
+        with tempfile.TemporaryDirectory() as repo_path:
+            app_path = os.path.join(repo_path, "apps", "web")
+            library_path = os.path.join(repo_path, "packages", "shared", "src")
+            os.makedirs(app_path)
+            os.makedirs(library_path)
+            with open(os.path.join(repo_path, "package.json"), "w", encoding="utf-8") as package_file:
+                json.dump({"private": True, "workspaces": ["apps/*", "packages/*"]}, package_file)
+            with open(
+                os.path.join(repo_path, "packages", "shared", "package.json"),
+                "w",
+                encoding="utf-8",
+            ) as package_file:
+                json.dump({"name": "@example/shared", "source": "src/index.ts"}, package_file)
+            main_path = os.path.join(app_path, "main.ts")
+            shared_path = os.path.join(library_path, "index.ts")
+            with open(main_path, "w", encoding="utf-8") as source_file:
+                source_file.write("import { shared } from '@example/shared'; shared();")
+            with open(shared_path, "w", encoding="utf-8") as source_file:
+                source_file.write("export function shared() { return true; }")
+
+            parsed_files = ParserService().parse_many(
+                [
+                    (main_path, "apps/web/main.ts"),
+                    (shared_path, "packages/shared/src/index.ts"),
+                ]
+            )
+
+        self.assertEqual(parsed_files[0].imports[0].kind, "local")
+        self.assertEqual(parsed_files[0].imports[0].resolved, "packages/shared/src/index.ts")
+
+    def test_parse_many_calculates_aggregate_mccabe_complexity(self) -> None:
+        with tempfile.TemporaryDirectory() as repo_path:
+            source_path = os.path.join(repo_path, "complex.ts")
+            with open(source_path, "w", encoding="utf-8") as source_file:
+                source_file.write(
+                    """
+                    export function evaluate(value: number) {
+                      if (value > 0 && value < 10) {
+                        for (let index = 0; index < value; index += 1) value += index;
+                      }
+                      return value ? value : 0;
+                    }
+                    """
+                )
+
+            parsed_file = ParserService().parse_many([(source_path, "complex.ts")])[0]
+
+        # Module base + function base + if + logical AND + for + ternary.
+        self.assertEqual(parsed_file.complexity, 6)
 
 
 class RepositoryIndexerServiceTests(unittest.TestCase):

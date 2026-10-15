@@ -27,6 +27,7 @@ class ParsedFile(BaseModel):
     classes: list[CodeClass] = Field(default_factory=list)
     functions: list[CodeMethod] = Field(default_factory=list)
     imports: list[ImportReference] = Field(default_factory=list)
+    complexity: int = 1
 
 
 class ParsedFileSummary(BaseModel):
@@ -35,12 +36,15 @@ class ParsedFileSummary(BaseModel):
     functions: int
     imports: int
     existing_tests: int
+    complexity: int = 1
 
 
 class RepositoryStatistics(BaseModel):
     files: int
     typescript: int
     javascript: int
+    python: int = 0
+    java: int = 0
 
 
 class RepositoryMetadata(BaseModel):
@@ -76,9 +80,12 @@ class WorkspaceSummary(BaseModel):
     jobId: str | None = None
     repoUrl: str
     repoName: str
+    indexedBranch: str | None = None
     status: str
     statistics: RepositoryStatistics = Field(
-        default_factory=lambda: RepositoryStatistics(files=0, typescript=0, javascript=0)
+        default_factory=lambda: RepositoryStatistics(
+            files=0, typescript=0, javascript=0, python=0, java=0
+        )
     )
     stages: list[WorkspaceBuildStage] = Field(default_factory=list)
     error: str | None = None

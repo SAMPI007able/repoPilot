@@ -6,7 +6,9 @@ import {
   extractAPIError,
   getPersistedWorkspace,
   getWorkspaceBuild,
+  listWorkspaceBranches,
   listPersistedWorkspaces,
+  reindexPersistedWorkspace,
   startWorkspaceBuild,
   importProviderRepository as startProviderRepositoryImport,
 } from '../services/api'
@@ -23,6 +25,7 @@ export interface WorkspaceListItem {
   id: string
   repoName: string
   repoUrl: string
+  indexedBranch: string | null
   status: WorkspaceStatus
   docs: string[]
   metadata: RepositoryMetadata | null
@@ -49,6 +52,9 @@ export const useWorkspaceStore = defineStore('workspace', () => {
   const loadingList = ref(false)
   const busy = ref(false)
   const removingIds = ref<string[]>([])
+  const reindexingIds = ref<string[]>([])
+  const loadingBranchIds = ref<string[]>([])
+  const branchesByWorkspace = ref<Record<string, string[]>>({})
   const error = ref<string | null>(null)
   const removedWorkspaceIds = new Set<string>()
   let workspaceLoadPromise: Promise<void> | null = null
@@ -167,6 +173,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
       id: workspaceId,
       repoName: extractRepoName(repositoryUrl.value),
       repoUrl: repositoryUrl.value.trim(),
+      indexedBranch: null,
       status: 'pending',
       docs: projectDocuments.value.map((file) => file.name),
       metadata: null,
@@ -243,6 +250,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
       id: workspaceId,
       repoName: repository.fullName,
       repoUrl: repository.webUrl,
+      indexedBranch: branch || repository.defaultBranch,
       status: 'pending', docs: [], metadata: null, jobId: null, stages: initialStages(),
     })
     activeId.value = workspaceId
@@ -302,6 +310,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
       patchWorkspace(id, {
         repoName: persistedWorkspace.repoName,
         repoUrl: persistedWorkspace.repoUrl,
+        indexedBranch: persistedWorkspace.indexedBranch,
         status: 'ready',
         metadata: persistedWorkspace.metadata,
         stages: mapBuildStages(persistedWorkspace.stages),
@@ -345,6 +354,67 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     }
   }
 
+  async function loadWorkspaceBranches(id: string, force = false) {
+    if ((!force && branchesByWorkspace.value[id]) || loadingBranchIds.value.includes(id)) return
+    loadingBranchIds.value = [...loadingBranchIds.value, id]
+    try {
+      branchesByWorkspace.value = {
+        ...branchesByWorkspace.value,
+        [id]: await listWorkspaceBranches(id),
+      }
+    } catch (caughtError) {
+      error.value = extractMessage(caughtError, 'Failed to load repository branches.')
+    } finally {
+      loadingBranchIds.value = loadingBranchIds.value.filter((workspaceId) => workspaceId !== id)
+    }
+  }
+
+  async function reindexWorkspace(id: string, branch?: string) {
+    const workspace = workspaces.value.find((item) => item.id === id)
+    if (!workspace || reindexingIds.value.includes(id)) return null
+    const selectedBranch = branch || workspace.indexedBranch || undefined
+    const branchDescription = selectedBranch ? ` from branch “${selectedBranch}”` : ''
+    if (!window.confirm(`Re-index ${workspace.repoName}${branchDescription}?`)) return null
+
+    error.value = null
+    reindexingIds.value = [...reindexingIds.value, id]
+    const previousBranch = workspace.indexedBranch
+    try {
+      let buildJob = await reindexPersistedWorkspace(id, selectedBranch)
+      patchWorkspace(id, {
+        status: 'building',
+        indexedBranch: selectedBranch ?? previousBranch,
+        jobId: buildJob.jobId,
+        stages: mapBuildStages(buildJob.stages),
+      })
+      while (buildJob.status === 'queued' || buildJob.status === 'running') {
+        await wait(400)
+        buildJob = await getWorkspaceBuild(buildJob.jobId)
+        patchWorkspace(id, {
+          status: buildJob.status === 'failed' ? 'ready' : 'building',
+          stages: mapBuildStages(buildJob.stages),
+        })
+      }
+      if (buildJob.status === 'failed') throw new Error(buildJob.error ?? 'Re-index failed.')
+      if (!buildJob.metadata) throw new Error('Re-index completed without repository metadata.')
+      patchWorkspace(id, {
+        status: 'ready',
+        metadata: buildJob.metadata,
+        indexedBranch: selectedBranch ?? previousBranch,
+        stages: mapBuildStages(buildJob.stages),
+      })
+      await loadWorkspaces(false)
+      return buildJob.metadata
+    } catch (caughtError) {
+      error.value = extractMessage(caughtError, 'Failed to re-index workspace.')
+      patchWorkspace(id, { status: 'ready', indexedBranch: previousBranch })
+      window.alert(error.value)
+      return null
+    } finally {
+      reindexingIds.value = reindexingIds.value.filter((workspaceId) => workspaceId !== id)
+    }
+  }
+
   function startNewWorkspace() {
     activeId.value = null
     error.value = null
@@ -361,6 +431,9 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     loadingList.value = false
     busy.value = false
     removingIds.value = []
+    reindexingIds.value = []
+    loadingBranchIds.value = []
+    branchesByWorkspace.value = {}
     error.value = null
     removedWorkspaceIds.clear()
   }
@@ -406,6 +479,9 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     loadingList,
     busy,
     removingIds,
+    reindexingIds,
+    loadingBranchIds,
+    branchesByWorkspace,
     error,
     frameworkLabel,
     pipelineStages,
@@ -418,6 +494,8 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     setProjectDocuments,
     selectWorkspace,
     removeWorkspace,
+    loadWorkspaceBranches,
+    reindexWorkspace,
     startNewWorkspace,
     clearSession,
   }
@@ -480,6 +558,7 @@ function mapPersistedWorkspace(workspace: PersistedWorkspaceSummary): WorkspaceL
     id: workspace.id,
     repoName: workspace.repoName,
     repoUrl: workspace.repoUrl,
+    indexedBranch: workspace.indexedBranch,
     status: statusMap[workspace.status],
     docs: [],
     metadata: null,

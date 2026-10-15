@@ -148,6 +148,11 @@ async function importRepository(repository: import('../types/api').ProviderRepos
         :framework-label="workspaceStore.frameworkLabel"
         :stages="workspaceStore.pipelineStages"
         :target-options="workspaceStore.targetOptions"
+        :branch-options="workspaceStore.branchesByWorkspace[workspaceStore.activeWorkspace.id] ?? []"
+        :loading-branches="workspaceStore.loadingBranchIds.includes(workspaceStore.activeWorkspace.id)"
+        :reindexing="workspaceStore.reindexingIds.includes(workspaceStore.activeWorkspace.id)"
+        @load-branches="workspaceStore.loadWorkspaceBranches(workspaceStore.activeWorkspace.id)"
+        @reindex="(branch) => workspaceStore.reindexWorkspace(workspaceStore.activeWorkspace!.id, branch)"
       />
 
       <Landing

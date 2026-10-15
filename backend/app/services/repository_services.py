@@ -2,6 +2,7 @@ import base64
 import os
 import shutil
 import stat
+import subprocess
 import urllib.parse
 from typing import Dict, Any
 
@@ -11,7 +12,7 @@ class RepositoryService:
         '.git', 'node_modules', 'dist', 'coverage',
         'build', '.next', '.nuxt', 'vendor', 'target'
     }
-    SUPPORTED_EXTENSIONS = {'.ts', '.tsx', '.js', '.jsx'}
+    SUPPORTED_EXTENSIONS = {'.ts', '.tsx', '.js', '.jsx', '.py', '.java'}
     RUNTIME_SIGNAL_FILES = {
         "package.json", "package-lock.json", "npm-shrinkwrap.json",
         "pnpm-lock.yaml", "yarn.lock", "bun.lock", "bun.lockb",
@@ -149,6 +150,43 @@ class RepositoryService:
         except Exception:
             return None
 
+    def get_current_branch(self, repository_path: str) -> str | None:
+        try:
+            import git
+
+            repository = git.Repo(repository_path)
+            if repository.head.is_detached:
+                return None
+            return repository.active_branch.name
+        except Exception:
+            return None
+
+    def list_remote_branches(
+        self,
+        git_url: str,
+        authorization: str | None = None,
+    ) -> list[str]:
+        clone_url = self._without_url_credentials(git_url)
+        environment = os.environ.copy()
+        environment["GIT_TERMINAL_PROMPT"] = "0"
+        if authorization:
+            environment.update(self._git_authorization_environment(clone_url, authorization))
+        result = subprocess.run(
+            ["git", "ls-remote", "--heads", clone_url],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            env=environment,
+            check=True,
+        )
+        prefix = "refs/heads/"
+        return sorted(
+            line.split("\t", 1)[1][len(prefix):]
+            for line in result.stdout.splitlines()
+            if "\t" in line and line.split("\t", 1)[1].startswith(prefix)
+        )
+
     def delete_repository(self, repository_path: str) -> None:
         if not os.path.exists(repository_path):
             return
@@ -163,13 +201,15 @@ class RepositoryService:
         """
         Recursively scan the repository files, filtering by supported extensions.
         Ignored folders: .git, node_modules, dist, coverage, build, .next, .nuxt, vendor, target
-        Allowed extensions: .ts, .tsx, .js, .jsx
+        Allowed extensions: .ts, .tsx, .js, .jsx, .py, .java
         """
         files_metadata = []
         runtime_files = []
         total_files = 0
         typescript_count = 0
         javascript_count = 0
+        python_count = 0
+        java_count = 0
 
         for root, dirs, files in os.walk(repo_path):
             # Prune ignored directories in-place to avoid walking down them
@@ -206,6 +246,10 @@ class RepositoryService:
                     typescript_count += 1
                 elif ext in {'.js', '.jsx'}:
                     javascript_count += 1
+                elif ext == '.py':
+                    python_count += 1
+                elif ext == '.java':
+                    java_count += 1
 
         return {
             "files": files_metadata,
@@ -213,7 +257,9 @@ class RepositoryService:
             "stats": {
                 "files": total_files,
                 "typescript": typescript_count,
-                "javascript": javascript_count
+                "javascript": javascript_count,
+                "python": python_count,
+                "java": java_count,
             }
         }
 
