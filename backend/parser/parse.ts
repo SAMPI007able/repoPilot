@@ -40,16 +40,21 @@ function getScriptKind(filePath) {
 }
 
 function getImportPath(node) {
-  return node.moduleSpecifier.text;
+  const specifier = node.moduleSpecifier;
+  if (specifier && typeof specifier.text === "string" && specifier.text.length > 0) {
+    return specifier.text;
+  }
+  return null;
 }
 
 function isLocalModule(modulePath) {
-  return modulePath.startsWith(".");
+  return typeof modulePath === "string" && modulePath.startsWith(".");
 }
 
 const compilerOptionsCache = new Map();
 const workspacePackagesCache = new Map();
-const SOURCE_EXTENSIONS = [".ts", ".tsx", ".js", ".jsx"];
+const SOURCE_EXTENSIONS = [".ts", ".tsx", ".js", ".jsx", ".mts", ".cts", ".mjs", ".cjs"];
+const TYPESCRIPT_EXTENSIONS = new Set(SOURCE_EXTENSIONS);
 
 function toPosix(filePath) {
   return filePath.split(path.sep).join("/");
@@ -203,6 +208,9 @@ function loadWorkspacePackages(repositoryRoot) {
 }
 
 function resolveWorkspaceModule(modulePath, repositoryRoot) {
+  if (typeof modulePath !== "string" || modulePath.length === 0) {
+    return null;
+  }
   const packages = loadWorkspacePackages(repositoryRoot);
   const packageName = [...packages.keys()]
     .sort((left, right) => right.length - left.length)
@@ -312,8 +320,22 @@ function isComplexityDecision(node) {
   ].includes(node.operatorToken.kind);
 }
 
+function emptyMetadata(filePath, sourceText) {
+  return {
+    file: path.basename(filePath),
+    source_code: sourceText,
+    classes: [],
+    functions: [],
+    imports: [],
+    complexity: 1,
+  };
+}
+
 function extractMetadata(filePath, repositoryRoot = findRepositoryRoot(filePath)) {
   const sourceText = fs.readFileSync(filePath, "utf8");
+  if (!TYPESCRIPT_EXTENSIONS.has(path.extname(filePath).toLowerCase())) {
+    return emptyMetadata(filePath, sourceText);
+  }
   const sourceFile = ts.createSourceFile(
     filePath,
     sourceText,
@@ -333,11 +355,17 @@ function extractMetadata(filePath, repositoryRoot = findRepositoryRoot(filePath)
 
   function visit(node) {
     if (ts.isImportDeclaration(node)) {
-      metadata.imports.push(buildImportReference(filePath, getImportPath(node), repositoryRoot));
+      const importPath = getImportPath(node);
+      if (importPath) {
+        metadata.imports.push(buildImportReference(filePath, importPath, repositoryRoot));
+      }
     }
 
     if (ts.isExportDeclaration(node) && node.moduleSpecifier) {
-      metadata.imports.push(buildImportReference(filePath, getImportPath(node), repositoryRoot));
+      const importPath = getImportPath(node);
+      if (importPath) {
+        metadata.imports.push(buildImportReference(filePath, importPath, repositoryRoot));
+      }
     }
 
     if (

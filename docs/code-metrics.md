@@ -2,7 +2,7 @@
 
 ## Per-file cyclomatic complexity
 
-The repository indexer calculates an aggregate McCabe cyclomatic complexity score for every parsed JavaScript or TypeScript file. The score is deterministic and comes directly from the TypeScript abstract syntax tree.
+The repository indexer calculates an aggregate McCabe cyclomatic complexity score for every parsed JavaScript, TypeScript, Python, or Java file. TypeScript and JavaScript scores come from the TypeScript compiler AST; Python scores come from the Python AST (with a syntax-tolerant fallback); Java scores come from a comment-aware source scan so indexing does not require a JDK.
 
 Each file starts at **1** for its module-level execution path. The score then increases by one for:
 

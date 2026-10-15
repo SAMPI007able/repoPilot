@@ -84,6 +84,111 @@ class ParserServiceTests(unittest.TestCase):
         self.assertEqual(parsed_files[0].imports[0].kind, "local")
         self.assertEqual(parsed_files[0].imports[0].resolved, "packages/shared/src/index.ts")
 
+    def test_parse_many_indexes_python_and_java_without_typescript_compiler(self) -> None:
+        with tempfile.TemporaryDirectory() as repo_path:
+            package_root = os.path.join(repo_path, "app")
+            java_root = os.path.join(repo_path, "src", "main", "java", "com", "example")
+            os.makedirs(package_root)
+            os.makedirs(java_root)
+            with open(os.path.join(package_root, "__init__.py"), "w", encoding="utf-8") as source_file:
+                source_file.write("")
+            helper_path = os.path.join(package_root, "helper.py")
+            main_path = os.path.join(package_root, "main.py")
+            service_path = os.path.join(java_root, "Service.java")
+            client_path = os.path.join(java_root, "Client.java")
+            with open(helper_path, "w", encoding="utf-8") as source_file:
+                source_file.write("def helper():\n    return True\n")
+            with open(main_path, "w", encoding="utf-8") as source_file:
+                source_file.write(
+                    "from app.helper import helper\n\n"
+                    "class Greeter:\n"
+                    "    def greet(self, value):\n"
+                    "        if value and helper():\n"
+                    "            return value\n"
+                    "        return None\n"
+                )
+            with open(service_path, "w", encoding="utf-8") as source_file:
+                source_file.write("package com.example;\npublic class Service { public int id() { return 1; } }\n")
+            with open(client_path, "w", encoding="utf-8") as source_file:
+                source_file.write(
+                    "package com.example;\n"
+                    "import com.example.Service;\n"
+                    "public class Client { public int run(Service service) { if (service != null) { return service.id(); } return 0; } }\n"
+                )
+            ts_path = os.path.join(repo_path, "index.ts")
+            with open(ts_path, "w", encoding="utf-8") as source_file:
+                source_file.write("export const ready = true;\n")
+
+            parsed_files = ParserService().parse_many(
+                [
+                    (main_path, "app/main.py"),
+                    (helper_path, "app/helper.py"),
+                    (client_path, "src/main/java/com/example/Client.java"),
+                    (service_path, "src/main/java/com/example/Service.java"),
+                    (ts_path, "index.ts"),
+                ]
+            )
+
+        python_main, python_helper, java_client, java_service, typescript = parsed_files
+        self.assertEqual(python_main.classes[0].name, "Greeter")
+        self.assertEqual([function.name for function in python_main.functions], ["greet"])
+        self.assertEqual(python_main.imports[0].kind, "local")
+        self.assertEqual(python_main.imports[0].resolved, "app/helper.py")
+        self.assertGreaterEqual(python_main.complexity, 4)
+        self.assertEqual(python_helper.functions[0].name, "helper")
+        self.assertEqual(java_client.classes[0].name, "Client")
+        self.assertEqual(java_client.imports[0].kind, "local")
+        self.assertEqual(java_client.imports[0].resolved, "src/main/java/com/example/Service.java")
+        self.assertEqual(java_service.classes[0].name, "Service")
+        self.assertEqual(typescript.functions, [])
+        self.assertEqual(typescript.source_code.strip(), "export const ready = true;")
+
+    def test_python_syntax_from_other_versions_does_not_fail_the_batch(self) -> None:
+        with tempfile.TemporaryDirectory() as repo_path:
+            legacy_path = os.path.join(repo_path, "legacy.py")
+            modern_path = os.path.join(repo_path, "service.py")
+            with open(legacy_path, "w", encoding="utf-8") as source_file:
+                source_file.write("print 'legacy'\nclass Legacy:\n    def run(self):\n        return 1\n")
+            with open(modern_path, "w", encoding="utf-8") as source_file:
+                source_file.write(
+                    "class Service:\n"
+                    "    def run(self, value):\n"
+                    "        match value:\n"
+                    "            case 1:\n"
+                    "                return value\n"
+                    "            case _:\n"
+                    "                return 0\n"
+                )
+
+            parsed_files = ParserService().parse_many(
+                [(legacy_path, "legacy.py"), (modern_path, "service.py")]
+            )
+
+        self.assertEqual(parsed_files[0].classes[0].name, "Legacy")
+        self.assertEqual(parsed_files[0].functions[0].name, "run")
+        self.assertGreaterEqual(parsed_files[0].complexity, 2)
+        self.assertEqual(parsed_files[1].classes[0].name, "Service")
+
+    def test_java_records_and_text_blocks_are_indexed(self) -> None:
+        with tempfile.TemporaryDirectory() as repo_path:
+            source_path = os.path.join(repo_path, "Person.java")
+            with open(source_path, "w", encoding="utf-8") as source_file:
+                source_file.write(
+                    "public record Person(String name) {\n"
+                    "  public String label() {\n"
+                    '    return """\n'
+                    "      if (ignored) {\n"
+                    '      """;\n'
+                    "  }\n"
+                    "}\n"
+                )
+
+            parsed_file = ParserService().parse_many([(source_path, "Person.java")])[0]
+
+        self.assertEqual(parsed_file.classes[0].name, "Person")
+        self.assertIn("label", [function.name for function in parsed_file.functions])
+        self.assertNotIn("if", [function.name for function in parsed_file.functions])
+
     def test_parse_many_calculates_aggregate_mccabe_complexity(self) -> None:
         with tempfile.TemporaryDirectory() as repo_path:
             source_path = os.path.join(repo_path, "complex.ts")
@@ -103,6 +208,33 @@ class ParserServiceTests(unittest.TestCase):
 
         # Module base + function base + if + logical AND + for + ternary.
         self.assertEqual(parsed_file.complexity, 6)
+
+
+class RepositoryScanTests(unittest.TestCase):
+    def test_scan_skips_python_virtualenv_and_counts_languages(self) -> None:
+        with tempfile.TemporaryDirectory() as repo_path:
+            os.makedirs(os.path.join(repo_path, ".venv", "lib"))
+            os.makedirs(os.path.join(repo_path, "src", "main", "java", "com", "example"))
+            with open(os.path.join(repo_path, ".venv", "lib", "site.py"), "w", encoding="utf-8") as source_file:
+                source_file.write("ignored = True\n")
+            with open(os.path.join(repo_path, "src", "app.py"), "w", encoding="utf-8") as source_file:
+                source_file.write("value = 1\n")
+            with open(
+                os.path.join(repo_path, "src", "main", "java", "com", "example", "App.java"),
+                "w",
+                encoding="utf-8",
+            ) as source_file:
+                source_file.write("class App {}")
+            with open(os.path.join(repo_path, "src", "index.ts"), "w", encoding="utf-8") as source_file:
+                source_file.write("export {}\n")
+
+            result = RepositoryService().scan_repository(repo_path)
+
+        self.assertEqual(result["stats"], {"files": 3, "typescript": 1, "javascript": 0, "python": 1, "java": 1})
+        self.assertEqual(
+            sorted(file_info["path"] for file_info in result["files"]),
+            ["src/app.py", "src/index.ts", "src/main/java/com/example/App.java"],
+        )
 
 
 class RepositoryIndexerServiceTests(unittest.TestCase):

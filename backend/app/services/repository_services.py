@@ -10,7 +10,9 @@ from typing import Dict, Any
 class RepositoryService:
     IGNORE_DIRS = {
         '.git', 'node_modules', 'dist', 'coverage',
-        'build', '.next', '.nuxt', 'vendor', 'target'
+        'build', '.next', '.nuxt', 'vendor', 'target',
+        '__pycache__', '.venv', 'venv', '.tox', '.mypy_cache',
+        '.pytest_cache', '.gradle', 'site-packages',
     }
     SUPPORTED_EXTENSIONS = {'.ts', '.tsx', '.js', '.jsx', '.py', '.java'}
     RUNTIME_SIGNAL_FILES = {

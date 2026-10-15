@@ -207,12 +207,17 @@ class RepositoryIndexerService:
         return normalized
 
     def _is_test_file(self, path: str) -> bool:
-        normalized = path.lower()
+        normalized = path.lower().replace("\\", "/")
+        file_name = normalized.rsplit("/", 1)[-1]
         return (
             ".test." in normalized
             or ".spec." in normalized
             or "/tests/" in normalized
             or "/__tests__/" in normalized
+            or "/src/test/" in normalized
+            or file_name.startswith("test_")
+            or file_name.endswith("_test.py")
+            or file_name.endswith("test.java")
         )
 
     def _load_package_intelligence(self, repo_path: str) -> PackageIntelligence | None:

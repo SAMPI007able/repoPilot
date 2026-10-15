@@ -4,6 +4,9 @@ import subprocess
 import tempfile
 from collections.abc import Iterable
 from app.models.code_models import CodeClass, CodeMethod, ImportReference, ParsedFile
+from app.services.java_source_parser import parse_java_file
+from app.services.python_source_parser import parse_python_file
+from app.services.source_resolution import infer_repository_root
 
 
 class ParserService:
@@ -14,49 +17,62 @@ class ParserService:
         self.parser_cwd = os.path.dirname(self.parser_script)
 
     def parse(self, file_path: str, relative_path: str | None = None) -> ParsedFile:
-        if not os.path.isfile(file_path):
-            raise FileNotFoundError(f"Cannot parse missing file: {file_path}")
-
-        try:
-            result = subprocess.run(
-                ["node", "--experimental-strip-types", self.parser_script, file_path],
-                cwd=self.parser_cwd,
-                capture_output=True,
-                text=False,
-                check=True,
-            )
-        except subprocess.CalledProcessError as exc:
-            stderr = self._decode_output(exc.stderr)
-            stdout = self._decode_output(exc.stdout)
-            error_message = stderr.strip() or stdout.strip() or str(exc)
-            raise RuntimeError(f"Node parser failed for {file_path}: {error_message}") from exc
-
-        try:
-            raw_metadata = json.loads(self._decode_output(result.stdout))
-        except json.JSONDecodeError as exc:
-            raise RuntimeError(
-                f"Node parser returned invalid JSON for {file_path}: {self._decode_output(result.stdout)!r}"
-            ) from exc
-
-        return self._to_parsed_file(raw_metadata, relative_path)
+        parsed = self.parse_many([(file_path, relative_path or os.path.basename(file_path))])
+        return parsed[0]
 
     def parse_many(self, files: Iterable[tuple[str, str]]) -> list[ParsedFile]:
-        """Parse a repository with one Node process instead of one process per file."""
-        manifest = []
+        """Parse mixed-language repositories without sending Python/Java through the TS compiler."""
+        entries = []
         for file_path, relative_path in files:
             if not os.path.isfile(file_path):
                 raise FileNotFoundError(f"Cannot parse missing file: {file_path}")
-            repository_root = os.path.abspath(file_path)
-            for _ in relative_path.replace("\\", "/").split("/"):
-                repository_root = os.path.dirname(repository_root)
-            manifest.append(
-                {
-                    "file_path": os.path.abspath(file_path),
-                    "relative_path": relative_path,
-                    "repository_root": repository_root,
-                }
+            entries.append(
+                (
+                    os.path.abspath(file_path),
+                    relative_path,
+                    infer_repository_root(file_path, relative_path),
+                    os.path.splitext(file_path)[1].lower(),
+                )
             )
 
+        parsed: list[ParsedFile | None] = [None] * len(entries)
+        typescript_batch: list[tuple[int, str, str, str]] = []
+        for index, (file_path, relative_path, repository_root, extension) in enumerate(entries):
+            if extension == ".py":
+                parsed[index] = self._to_parsed_file(
+                    parse_python_file(file_path, relative_path, repository_root),
+                    relative_path,
+                )
+            elif extension == ".java":
+                parsed[index] = self._to_parsed_file(
+                    parse_java_file(file_path, relative_path, repository_root),
+                    relative_path,
+                )
+            else:
+                typescript_batch.append((index, file_path, relative_path, repository_root))
+
+        if typescript_batch:
+            for index, parsed_file in zip(
+                [item[0] for item in typescript_batch],
+                self._parse_typescript_batch(
+                    [(file_path, relative_path, repository_root) for _, file_path, relative_path, repository_root in typescript_batch]
+                ),
+            ):
+                parsed[index] = parsed_file
+
+        if any(item is None for item in parsed):
+            raise RuntimeError("Parser returned an incomplete mixed-language batch")
+        return [item for item in parsed if item is not None]
+
+    def _parse_typescript_batch(self, files: list[tuple[str, str, str]]) -> list[ParsedFile]:
+        manifest = [
+            {
+                "file_path": file_path,
+                "relative_path": relative_path,
+                "repository_root": repository_root,
+            }
+            for file_path, relative_path, repository_root in files
+        ]
         if not manifest:
             return []
 
