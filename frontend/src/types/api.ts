@@ -328,3 +328,9 @@ export interface AdminBrowserSession { id: string; userId: string | null; userEm
 export interface AdminUsage { userId: string; primaryEmail: string; aiRequests: number; previewCount: number; previewMinutes: number; storageBytes: number }
 export interface AdminFeatureFlag { key: string; enabled: boolean; description: string | null; updatedAt: string; updatedByUserId: string | null }
 export interface AdminLog { id: string; category: string; severity: string; code: string | null; message: string; userId: string | null; createdAt: string }
+
+export type SupportCategory = 'CHAT_WITH_CODEBASE' | 'TEST_GENERATION' | 'IMPACT_ANALYSIS' | 'PREVIEW' | 'OTHER'
+export type SupportTicketStatus = 'OPEN' | 'IN_PROGRESS' | 'COMPLETED'
+export interface SupportTicketCreateRequest { category: SupportCategory; subject: string; descriptionHtml: string }
+export interface SupportTicket { id: string; category: SupportCategory; subject: string; descriptionHtml: string; status: SupportTicketStatus; createdAt: string; updatedAt: string; inProgressAt: string | null; completedAt: string | null }
+export interface AdminSupportTicket extends SupportTicket { userId: string; userEmail: string; userDisplayName: string | null }

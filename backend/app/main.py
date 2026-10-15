@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Body, Request, Header, Depends, Response
+from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Body, Request, Header, Depends, Response, BackgroundTasks
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, StreamingResponse, RedirectResponse
@@ -111,6 +111,16 @@ from app.services.rate_limit_guard import QuotaAPIError, RateLimitDecision, Rate
 from app.services.rate_limit_service import RateLimitBackendUnavailable, RateLimitService
 from app.services.telemetry import Telemetry
 from app.services.admin_service import AdminConflictError, AdminResourceNotFoundError, AdminService
+from app.models.support_models import (
+    AdminSupportTicket, SupportTicket, SupportTicketCreateRequest, SupportTicketStatus,
+    SupportTicketStatusUpdate, SupportUploadResponse,
+)
+from app.persistence.support_persistence_service import (
+    SupportAttachmentNotFoundError, SupportPersistenceService, SupportTicketNotFoundError,
+    SupportTicketTransitionError,
+)
+from app.services.email_service import EmailService, EmailSettings
+from app.services.support_service import MAX_ATTACHMENT_BYTES, SupportService, SupportValidationError
 
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -285,6 +295,14 @@ preview_service = PreviewService(
     preview_persistence_service,
     RQPreviewJobQueue(),
     PreviewLogService(artifact_store),
+)
+support_service = SupportService(
+    SupportPersistenceService(database),
+    artifact_store,
+    EmailService(EmailSettings.from_env()),
+    failure_logger=lambda message, _ticket_id: admin_service.record_log(
+        "support_email", message, code="SUPPORT_EMAIL_FAILED",
+    ),
 )
 rate_limit_settings = RateLimitSettings.from_env()
 rate_limit_service = RateLimitService(rate_limit_settings)
@@ -1247,6 +1265,90 @@ def impact_analysis(payload: ImpactAnalysisRequest, principal: Principal = Depen
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Impact analysis failed: {str(exc)}") from exc
+
+
+@app.post("/support/tickets", response_model=SupportTicket, status_code=201)
+def create_support_ticket(
+    payload: SupportTicketCreateRequest,
+    response: Response,
+    background_tasks: BackgroundTasks,
+    principal: Principal = Depends(auth.active_principal),
+):
+    _apply_rate_headers(response, rate_limit_guard.enforce(principal, "support_ticket"))
+    try:
+        ticket = support_service.create_ticket(principal.user_id, payload)
+    except SupportValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    background_tasks.add_task(support_service.notify_admins_of_new_ticket, ticket)
+    telemetry.capture(principal.user_id, "support_ticket_created", {"category": ticket.category.value})
+    return SupportTicket(**ticket.model_dump(by_alias=True))
+
+
+@app.get("/support/tickets", response_model=list[SupportTicket])
+def list_my_support_tickets(principal: Principal = Depends(auth.active_principal)):
+    return support_service.list_for_user(principal.user_id)
+
+
+@app.post("/support/uploads", response_model=SupportUploadResponse, status_code=201)
+def upload_support_image(
+    request: Request,
+    response: Response,
+    upload: UploadFile = File(...),
+    principal: Principal = Depends(auth.active_principal),
+):
+    _require_feature("uploads")
+    _apply_rate_headers(response, rate_limit_guard.enforce(principal, "document_upload"))
+    contents = upload.file.read(MAX_ATTACHMENT_BYTES + 1)
+    try:
+        url = support_service.store_image(principal.user_id, contents, str(request.base_url))
+    except SupportValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return SupportUploadResponse(url=url)
+
+
+@app.get("/support/uploads/{attachment_id}")
+def get_support_image(attachment_id: str):
+    # Attachment ids are unguessable UUIDs so images render in <img> tags and admin emails without auth headers.
+    try:
+        uuid.UUID(attachment_id)
+        contents, content_type = support_service.load_image(attachment_id)
+    except (ValueError, SupportAttachmentNotFoundError, FileNotFoundError) as exc:
+        raise HTTPException(status_code=404, detail="Attachment not found.") from exc
+    return Response(
+        content=contents,
+        media_type=content_type,
+        headers={
+            "Cache-Control": "private, max-age=86400",
+            "X-Content-Type-Options": "nosniff",
+            "Content-Security-Policy": "default-src 'none'; sandbox",
+        },
+    )
+
+
+@app.get("/admin/support/tickets", response_model=list[AdminSupportTicket])
+def admin_support_tickets(
+    status: SupportTicketStatus | None = None,
+    principal: Principal = Depends(auth.admin_principal),
+):
+    del principal
+    return support_service.list_all(status)
+
+
+@app.put("/admin/support/tickets/{ticket_id}/status", response_model=AdminSupportTicket)
+def admin_update_support_ticket_status(
+    ticket_id: str,
+    payload: SupportTicketStatusUpdate,
+    background_tasks: BackgroundTasks,
+    principal: Principal = Depends(auth.admin_principal),
+):
+    try:
+        ticket = support_service.update_status(ticket_id, payload.status, principal.user_id)
+    except SupportTicketNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Support ticket not found.") from exc
+    except SupportTicketTransitionError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    background_tasks.add_task(support_service.notify_requester_of_status, ticket)
+    return ticket
 
 
 @app.delete("/admin/rate-limits/{user_id}")

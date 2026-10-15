@@ -106,6 +106,23 @@ POSTHOG_HOST=https://us.i.posthog.com
 PREVIEW_TRUSTED_LOCAL_EXECUTION=false
 ```
 
+Support tickets email every active user whose role is `ADMIN` on
+submission and email the requester when an admin marks a ticket In Progress or
+Completed. Configure SMTP for this; without `SMTP_HOST` and `SMTP_FROM`, tickets
+are still stored but emails are skipped with a log warning:
+
+```dotenv
+SMTP_HOST=smtp.example.com
+SMTP_PORT=587
+SMTP_USERNAME=...
+SMTP_PASSWORD=...
+SMTP_FROM=TestForge Support <support@example.com>
+API_PUBLIC_URL=https://api.example.com
+```
+
+Apply `backend/migrations/007_support_tickets.sql` before deploying this
+release.
+
 Keep the rate-limit and concurrency variables from `.env.example`; the defaults
 are deliberately conservative. `PORT` is supplied by Railway and honored by
 the backend image. Fly may expose a fixed internal port instead.

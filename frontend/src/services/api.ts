@@ -25,6 +25,10 @@ import type {
   AdminPreview,
   AdminUsage,
   AdminUser,
+  AdminSupportTicket,
+  SupportTicket,
+  SupportTicketCreateRequest,
+  SupportTicketStatus,
 } from '../types/api'
 
 export const apiBaseUrl = import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000'
@@ -382,3 +386,13 @@ export async function listAdminUsage(): Promise<AdminUsage[]> { return (await ap
 export async function listAdminFeatureFlags(): Promise<AdminFeatureFlag[]> { return (await api.get('/admin/feature-flags')).data }
 export async function updateAdminFeatureFlag(key: string, enabled: boolean): Promise<AdminFeatureFlag> { return (await api.put(`/admin/feature-flags/${key}`, { enabled })).data }
 export async function listAdminLogs(): Promise<AdminLog[]> { return (await api.get('/admin/logs')).data }
+
+export async function createSupportTicket(payload: SupportTicketCreateRequest): Promise<SupportTicket> { return (await api.post('/support/tickets', payload)).data }
+export async function listMySupportTickets(): Promise<SupportTicket[]> { return (await api.get('/support/tickets')).data }
+export async function uploadSupportImage(file: File): Promise<string> {
+  const formData = new FormData()
+  formData.append('upload', file)
+  return (await api.post<{ url: string }>('/support/uploads', formData)).data.url
+}
+export async function listAdminSupportTickets(status?: SupportTicketStatus): Promise<AdminSupportTicket[]> { return (await api.get('/admin/support/tickets', { params: status ? { status } : {} })).data }
+export async function updateAdminSupportTicketStatus(ticketId: string, status: Exclude<SupportTicketStatus, 'OPEN'>): Promise<AdminSupportTicket> { return (await api.put(`/admin/support/tickets/${ticketId}/status`, { status })).data }

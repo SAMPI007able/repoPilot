@@ -1,3 +1,10 @@
+<script setup lang="ts">
+import AppFooter from './components/AppFooter.vue'
+</script>
+
 <template>
-  <RouterView />
+  <div class="app-root">
+    <RouterView class="app-root__view" />
+    <AppFooter />
+  </div>
 </template>

@@ -13,3 +13,4 @@ docker>=7.1,<8.0
 PyJWT[crypto]>=2.10,<3.0
 cryptography>=44,<46
 posthog>=3.0,<4.0
+nh3>=0.2.14,<1.0

@@ -41,6 +41,7 @@ class RateLimitSettings:
             policy("preview_extension", "RATE_LIMIT_PREVIEW_EXTENSION_DAILY", 20),
             policy("browser_session_creation", "RATE_LIMIT_BROWSER_SESSION_DAILY", 20),
             policy("screenshot_generation", "RATE_LIMIT_SCREENSHOT_DAILY", 50),
+            policy("support_ticket", "RATE_LIMIT_SUPPORT_TICKET_DAILY", 10),
         ])
         return cls(
             enabled=requested_enabled,

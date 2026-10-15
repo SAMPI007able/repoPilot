@@ -1,13 +1,18 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
-import { ArrowLeft, RefreshCw, Search, ShieldAlert } from '@lucide/vue'
+import { ArrowLeft, ChevronDown, RefreshCw, Search, ShieldAlert } from '@lucide/vue'
 import { useAuthStore } from '../stores/auth'
 import {
   deleteAdminUser, getAdminDashboard, listAdminBrowserSessions, listAdminFeatureFlags,
   listAdminLogs, listAdminPreviews, listAdminUsage, listAdminUsers, setAdminUserSuspended,
   terminateAdminBrowserSession, terminateAdminPreview, updateAdminFeatureFlag,
+  extractAPIError, listAdminSupportTickets, updateAdminSupportTicketStatus,
 } from '../services/api'
-import type { AdminBrowserSession, AdminDashboard, AdminFeatureFlag, AdminLog, AdminPreview, AdminUsage, AdminUser } from '../types/api'
+import { supportCategoryLabels, supportStatusLabels } from '../support/labels'
+import type {
+  AdminBrowserSession, AdminDashboard, AdminFeatureFlag, AdminLog, AdminPreview, AdminSupportTicket, AdminUsage,
+  AdminUser, SupportTicketStatus,
+} from '../types/api'
 
 const auth = useAuthStore()
 const dashboard = ref<AdminDashboard | null>(null)
@@ -17,6 +22,21 @@ const sessions = ref<AdminBrowserSession[]>([])
 const usage = ref<AdminUsage[]>([])
 const flags = ref<AdminFeatureFlag[]>([])
 const logs = ref<AdminLog[]>([])
+const supportTickets = ref<AdminSupportTicket[]>([])
+const supportFilter = ref<SupportTicketStatus | 'ALL'>('ALL')
+const expandedTicketId = ref<string | null>(null)
+const updatingTicketId = ref<string | null>(null)
+const supportError = ref('')
+const supportFilters: { value: SupportTicketStatus | 'ALL'; label: string }[] = [
+  { value: 'ALL', label: 'All' },
+  { value: 'OPEN', label: 'Open' },
+  { value: 'IN_PROGRESS', label: 'In Progress' },
+  { value: 'COMPLETED', label: 'Completed' },
+]
+const filteredSupportTickets = computed(() => supportFilter.value === 'ALL'
+  ? supportTickets.value
+  : supportTickets.value.filter((ticket) => ticket.status === supportFilter.value))
+const openTicketCount = computed(() => supportTickets.value.filter((ticket) => ticket.status !== 'COMPLETED').length)
 const query = ref('')
 const loading = ref(false)
 const error = ref('')
@@ -36,12 +56,13 @@ async function loadAll() {
   loading.value = true
   error.value = ''
   try {
-    const [summary, nextUsers, nextPreviews, nextSessions, nextUsage, nextFlags, nextLogs] = await Promise.all([
+    const [summary, nextUsers, nextPreviews, nextSessions, nextUsage, nextFlags, nextLogs, nextTickets] = await Promise.all([
       getAdminDashboard(), listAdminUsers(query.value), listAdminPreviews(), listAdminBrowserSessions(),
-      listAdminUsage(), listAdminFeatureFlags(), listAdminLogs(),
+      listAdminUsage(), listAdminFeatureFlags(), listAdminLogs(), listAdminSupportTickets(),
     ])
     dashboard.value = summary; users.value = nextUsers; previews.value = nextPreviews
     sessions.value = nextSessions; usage.value = nextUsage; flags.value = nextFlags; logs.value = nextLogs
+    supportTickets.value = nextTickets
   } catch (caught) { error.value = caught instanceof Error ? caught.message : 'Could not load admin data.' }
   finally { loading.value = false }
 }
@@ -61,6 +82,20 @@ async function toggleFlag(flag: AdminFeatureFlag) {
   const updated = await updateAdminFeatureFlag(flag.key, !flag.enabled)
   flags.value = flags.value.map((item) => item.key === updated.key ? updated : item)
 }
+async function setTicketStatus(ticket: AdminSupportTicket, status: Exclude<SupportTicketStatus, 'OPEN'>) {
+  if (status === 'COMPLETED' && !window.confirm(`Mark "${ticket.subject}" as completed? The requester will be emailed.`)) return
+  updatingTicketId.value = ticket.id
+  supportError.value = ''
+  try {
+    const updated = await updateAdminSupportTicketStatus(ticket.id, status)
+    supportTickets.value = supportTickets.value.map((item) => item.id === updated.id ? updated : item)
+  } catch (caught) {
+    supportError.value = extractAPIError(caught, 'Could not update the ticket.').message
+  } finally {
+    updatingTicketId.value = null
+  }
+}
+function toggleTicket(id: string) { expandedTicketId.value = expandedTicketId.value === id ? null : id }
 
 onMounted(loadAll)
 watch(isAdmin, (allowed) => { if (allowed && !dashboard.value) void loadAll() })
@@ -87,6 +122,36 @@ watch(isAdmin, (allowed) => { if (allowed && !dashboard.value) void loadAll() })
         <div class="admin-flags">
           <label v-for="flag in killSwitches" :key="flag.key"><span><strong>{{ flag.key.replace('_', ' ') }}</strong><small>{{ flag.description }}</small></span><input type="checkbox" :checked="flag.enabled" @change="toggleFlag(flag)"></label>
         </div>
+      </section>
+
+      <section id="support" class="admin-card">
+        <div class="admin-card__heading">
+          <div><h2>Support tickets</h2><p>{{ openTicketCount }} awaiting resolution · {{ supportTickets.length }} total</p></div>
+          <div class="support-filters" role="tablist" aria-label="Filter tickets by status">
+            <button v-for="filter in supportFilters" :key="filter.value" type="button" role="tab" :aria-selected="supportFilter === filter.value" :class="{ 'is-active': supportFilter === filter.value }" @click="supportFilter = filter.value">{{ filter.label }}</button>
+          </div>
+        </div>
+        <p v-if="supportError" class="error-text">{{ supportError }}</p>
+        <div v-if="!filteredSupportTickets.length" class="admin-empty">No support tickets{{ supportFilter === 'ALL' ? '' : ` with status ${supportStatusLabels[supportFilter]}` }}.</div>
+        <article v-for="ticket in filteredSupportTickets" :key="ticket.id" class="support-ticket" :class="{ 'is-open': expandedTicketId === ticket.id }">
+          <button class="support-ticket__summary" type="button" :aria-expanded="expandedTicketId === ticket.id" @click="toggleTicket(ticket.id)">
+            <span class="support-ticket__title">
+              <strong>{{ ticket.subject }}</strong>
+              <small>{{ supportCategoryLabels[ticket.category] }} · {{ ticket.userDisplayName || ticket.userEmail }} · {{ formatDate(ticket.createdAt) }}</small>
+            </span>
+            <span class="admin-status support-status" :class="`is-${ticket.status.toLowerCase()}`">{{ supportStatusLabels[ticket.status] }}</span>
+            <ChevronDown :size="16" class="support-ticket__chevron" aria-hidden="true" />
+          </button>
+          <div v-if="expandedTicketId === ticket.id" class="support-ticket__details">
+            <p class="support-ticket__meta">From <a :href="`mailto:${ticket.userEmail}`">{{ ticket.userEmail }}</a> · Ticket {{ shortId(ticket.id) }}<template v-if="ticket.inProgressAt"> · In progress {{ formatDate(ticket.inProgressAt) }}</template><template v-if="ticket.completedAt"> · Completed {{ formatDate(ticket.completedAt) }}</template></p>
+            <!-- descriptionHtml is sanitized server-side with an allowlist before it is stored. -->
+            <div class="support-content" v-html="ticket.descriptionHtml" />
+            <div v-if="ticket.status !== 'COMPLETED'" class="admin-actions support-ticket__actions">
+              <button v-if="ticket.status === 'OPEN'" class="btn btn-ghost" :disabled="updatingTicketId === ticket.id" @click="setTicketStatus(ticket, 'IN_PROGRESS')">Mark in progress</button>
+              <button class="btn btn-primary" :disabled="updatingTicketId === ticket.id" @click="setTicketStatus(ticket, 'COMPLETED')">Mark completed</button>
+            </div>
+          </div>
+        </article>
       </section>
 
       <section class="admin-card">

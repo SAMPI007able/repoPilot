@@ -9,8 +9,10 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@ckeditor/ckeditor5-vue": "^9.0.0",
     "@lucide/vue": "^1.25.0",
     "axios": "^1.18.1",
+    "ckeditor5": "^49.0.0",
     "lucide-vue-next": "^1.0.0",
     "oidc-client-ts": "^3.3.0",
     "pinia": "^4.0.2",
