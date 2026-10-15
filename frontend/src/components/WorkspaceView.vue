@@ -329,7 +329,9 @@ function layoutGraph(
     const pathsByLevel = new Map<number, string[]>()
     for (const path of component) {
       const level = levels.get(path) ?? 0
-      pathsByLevel.set(level, [...(pathsByLevel.get(level) ?? []), path])
+      const levelPaths = pathsByLevel.get(level)
+      if (levelPaths) levelPaths.push(path)
+      else pathsByLevel.set(level, [path])
     }
     const local = new Map<string, { x: number; y: number }>()
     for (const [level, levelPaths] of pathsByLevel) {
@@ -346,11 +348,20 @@ function layoutGraph(
         local.set(path, { x: Math.cos(angle) * radius, y: Math.sin(angle) * radius })
       })
     }
-    const values = [...local.values()]
-    const minX = Math.min(...values.map(({ x }) => x)) - 90
-    const maxX = Math.max(...values.map(({ x }) => x)) + 90
-    const minY = Math.min(...values.map(({ y }) => y)) - 90
-    const maxY = Math.max(...values.map(({ y }) => y)) + 90
+    let minX = Number.POSITIVE_INFINITY
+    let maxX = Number.NEGATIVE_INFINITY
+    let minY = Number.POSITIVE_INFINITY
+    let maxY = Number.NEGATIVE_INFINITY
+    for (const { x, y } of local.values()) {
+      minX = Math.min(minX, x)
+      maxX = Math.max(maxX, x)
+      minY = Math.min(minY, y)
+      maxY = Math.max(maxY, y)
+    }
+    minX -= 90
+    maxX += 90
+    minY -= 90
+    maxY += 90
     return { local, minX, minY, width: maxX - minX, height: maxY - minY }
   })
 
@@ -388,7 +399,16 @@ function buildShortLabel(path: string) {
 
 function inferKind(path: string) {
   const normalized = path.toLowerCase()
-  if (normalized.includes('.test.') || normalized.includes('.spec.') || normalized.includes('/tests/')) {
+  const fileName = normalized.split('/').pop() ?? normalized
+  if (
+    normalized.includes('.test.')
+    || normalized.includes('.spec.')
+    || normalized.includes('/tests/')
+    || normalized.includes('/src/test/')
+    || fileName.startsWith('test_')
+    || fileName.endsWith('_test.py')
+    || fileName.endsWith('test.java')
+  ) {
     return 'test'
   }
   if (normalized.includes('config') || normalized.endsWith('.json')) {

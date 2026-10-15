@@ -14,6 +14,7 @@ const searchQuery = ref('')
 const kindFilter = ref('all')
 const activeNodeId = ref<string | null>(null)
 const viewBox = ref({ x: 0, y: 0, width: 1000, height: 600 })
+const fittedWidth = ref(1000)
 let dragState: { pointerId: number; x: number; y: number } | null = null
 
 const filteredNodes = computed(() => {
@@ -29,10 +30,23 @@ const nodesById = computed(() => new Map(props.nodes.map((node) => [node.id, nod
 const renderedEdges = computed(() => props.edges.filter((edge) =>
   filteredNodeIds.value.has(edge.source) && filteredNodeIds.value.has(edge.target),
 ))
+const edgesByNode = computed(() => {
+  const result = new Map<string, GraphEdge[]>()
+  for (const edge of renderedEdges.value) {
+    const sourceEdges = result.get(edge.source)
+    if (sourceEdges) sourceEdges.push(edge)
+    else result.set(edge.source, [edge])
+    const targetEdges = result.get(edge.target)
+    if (targetEdges) targetEdges.push(edge)
+    else result.set(edge.target, [edge])
+  }
+  return result
+})
+const activeEdges = computed(() => activeNodeId.value ? edgesByNode.value.get(activeNodeId.value) ?? [] : [])
 const connectedNodeIds = computed(() => {
   if (!activeNodeId.value) return new Set<string>()
   const connected = new Set<string>([activeNodeId.value])
-  for (const edge of renderedEdges.value) {
+  for (const edge of activeEdges.value) {
     if (edge.source === activeNodeId.value) connected.add(edge.target)
     if (edge.target === activeNodeId.value) connected.add(edge.source)
   }
@@ -40,33 +54,60 @@ const connectedNodeIds = computed(() => {
 })
 const connectionsByNode = computed(() => {
   const result = new Map<string, number>()
-  for (const edge of renderedEdges.value) {
-    result.set(edge.source, (result.get(edge.source) ?? 0) + 1)
-    result.set(edge.target, (result.get(edge.target) ?? 0) + 1)
-  }
+  for (const [nodeId, edges] of edgesByNode.value) result.set(nodeId, edges.length)
   return result
 })
 const activeNode = computed(() => activeNodeId.value ? nodesById.value.get(activeNodeId.value) : null)
 const kindOptions = computed(() => ['all', ...new Set(props.nodes.map((node) => node.kind))])
+const zoomRatio = computed(() => fittedWidth.value / viewBox.value.width)
+const showShortLabels = computed(() => filteredNodes.value.length <= 250 || zoomRatio.value >= 1.35)
+const showNodeLabels = computed(() => filteredNodes.value.length <= 90 || zoomRatio.value >= 2.2)
+const nodeRadius = computed(() => Math.max(viewBox.value.width / 180, 18))
+const shortLabelSize = computed(() => Math.max(viewBox.value.width / 120, 10))
+const fullLabelSize = computed(() => Math.max(viewBox.value.width / 90, 10))
+const nodeLabelOffset = computed(() => nodeRadius.value + fullLabelSize.value * 1.35)
 const viewBoxValue = computed(() => {
   const { x, y, width, height } = viewBox.value
   return `${x} ${y} ${width} ${height}`
 })
 
+function edgePath(edges: GraphEdge[]) {
+  return edges.map((edge) => {
+    const source = nodesById.value.get(edge.source)
+    const target = nodesById.value.get(edge.target)
+    return source && target ? `M${source.x},${source.y}L${target.x},${target.y}` : ''
+  }).filter(Boolean).join('')
+}
+
+const normalEdgePath = computed(() => edgePath(renderedEdges.value.filter((edge) => edge.strength === 'normal')))
+const strongEdgePath = computed(() => edgePath(renderedEdges.value.filter((edge) => edge.strength === 'strong')))
+
 function fitGraph() {
   const nodes = filteredNodes.value
   if (!nodes.length) return
   const padding = 100
-  const minX = Math.min(...nodes.map((node) => node.x)) - padding
-  const maxX = Math.max(...nodes.map((node) => node.x)) + padding
-  const minY = Math.min(...nodes.map((node) => node.y)) - padding
-  const maxY = Math.max(...nodes.map((node) => node.y)) + padding
-  viewBox.value = {
+  let minX = Number.POSITIVE_INFINITY
+  let maxX = Number.NEGATIVE_INFINITY
+  let minY = Number.POSITIVE_INFINITY
+  let maxY = Number.NEGATIVE_INFINITY
+  for (const node of nodes) {
+    minX = Math.min(minX, node.x)
+    maxX = Math.max(maxX, node.x)
+    minY = Math.min(minY, node.y)
+    maxY = Math.max(maxY, node.y)
+  }
+  minX -= padding
+  maxX += padding
+  minY -= padding
+  maxY += padding
+  const fitted = {
     x: minX,
     y: minY,
     width: Math.max(maxX - minX, 320),
     height: Math.max(maxY - minY, 220),
   }
+  viewBox.value = fitted
+  fittedWidth.value = fitted.width
 }
 
 function zoom(factor: number, clientX?: number, clientY?: number) {
@@ -89,7 +130,7 @@ function handleWheel(event: WheelEvent) {
 }
 
 function startPan(event: PointerEvent) {
-  if ((event.target as Element).closest('.graph-node')) return
+  if ((event.target as Element).closest('.dependency-node')) return
   dragState = { pointerId: event.pointerId, x: event.clientX, y: event.clientY }
   svgElement.value?.setPointerCapture(event.pointerId)
 }
@@ -150,14 +191,24 @@ onMounted(fitGraph)
           <path d="M 0 0 L 10 5 L 0 10 z" />
         </marker>
       </defs>
+      <path
+        v-if="normalEdgePath"
+        class="graph-edge graph-edge--batch"
+        :class="{ 'graph-edge--muted': activeNodeId }"
+        :d="normalEdgePath"
+      />
+      <path
+        v-if="strongEdgePath"
+        class="graph-edge graph-edge--batch graph-edge--strong"
+        :class="{ 'graph-edge--muted': activeNodeId }"
+        :d="strongEdgePath"
+      />
       <line
-        v-for="edge in renderedEdges"
+        v-for="edge in activeEdges"
         :key="edge.id"
-        class="graph-edge"
+        class="graph-edge graph-edge--connected"
         :class="{
           'graph-edge--strong': edge.strength === 'strong',
-          'graph-edge--connected': activeNodeId && (edge.source === activeNodeId || edge.target === activeNodeId),
-          'graph-edge--muted': activeNodeId && edge.source !== activeNodeId && edge.target !== activeNodeId,
         }"
         :x1="nodesById.get(edge.source)?.x"
         :y1="nodesById.get(edge.source)?.y"
@@ -168,12 +219,12 @@ onMounted(fitGraph)
       <g
         v-for="node in filteredNodes"
         :key="node.id"
-        class="graph-node"
+        class="dependency-node"
         :class="[
-          `graph-node--${node.kind}`,
+          `dependency-node--${node.kind}`,
           {
-            'graph-node--selected': activeNodeId === node.id,
-            'graph-node--muted': activeNodeId && !connectedNodeIds.has(node.id),
+            'dependency-node--selected': activeNodeId === node.id,
+            'dependency-node--muted': activeNodeId && !connectedNodeIds.has(node.id),
           },
         ]"
         :transform="`translate(${node.x} ${node.y})`"
@@ -185,9 +236,9 @@ onMounted(fitGraph)
         @focus="activeNodeId = node.id"
         @blur="activeNodeId = null"
       >
-        <circle r="18" />
-        <text class="graph-node__short" text-anchor="middle" dominant-baseline="central">{{ node.short }}</text>
-        <text class="graph-node__label" text-anchor="middle" y="32">{{ node.label }}</text>
+        <circle :r="nodeRadius" />
+        <text v-if="showShortLabels || activeNodeId === node.id" class="dependency-node__short" text-anchor="middle" dominant-baseline="central" :style="{ fontSize: `${shortLabelSize}px` }">{{ node.short }}</text>
+        <text v-if="showNodeLabels || activeNodeId === node.id" class="dependency-node__label" text-anchor="middle" :y="nodeLabelOffset" :style="{ fontSize: `${fullLabelSize}px` }">{{ node.label }}</text>
         <title>{{ node.id }} · {{ connectionLabel(connectionsByNode.get(node.id) ?? 0) }}</title>
       </g>
     </svg>

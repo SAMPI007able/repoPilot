@@ -1289,8 +1289,7 @@ button {
 }
 
 .language-bar {
-  display: grid;
-  grid-template-columns: 64fr 22fr 14fr;
+  display: flex;
   gap: 0;
   margin-top: 0.5rem;
   overflow: hidden;
@@ -1305,6 +1304,14 @@ button {
 
 .language-bar__js {
   background: #facc15;
+}
+
+.language-bar__python {
+  background: #3776ab;
+}
+
+.language-bar__java {
+  background: #f89820;
 }
 
 .language-bar__other {
@@ -1643,51 +1650,76 @@ button {
 
 .graph-canvas .graph-edge {
   stroke-width: 1.4;
-  marker-end: url(#graph-arrow);
   vector-effect: non-scaling-stroke;
+}
+
+.graph-canvas .graph-edge--batch {
+  fill: none;
+  pointer-events: none;
+}
+
+.graph-canvas line.graph-edge--connected {
+  marker-end: url(#graph-arrow);
 }
 
 .graph-canvas #graph-arrow path {
   fill: rgba(34, 211, 238, 0.58);
 }
 
-.graph-canvas .graph-node {
-  position: static;
-  transform-origin: center;
+.graph-canvas .dependency-node {
   cursor: pointer;
   outline: none;
+  transition: opacity 160ms ease;
 }
 
-.graph-canvas .graph-node circle {
+.graph-canvas .dependency-node circle {
   fill: rgba(7, 15, 29, 0.98);
   stroke: currentColor;
   stroke-width: 2.5;
   vector-effect: non-scaling-stroke;
-  transition: r 160ms ease, opacity 160ms ease;
+  transform-box: fill-box;
+  transform-origin: center;
+  transition: transform 160ms ease, opacity 160ms ease;
 }
 
-.graph-canvas .graph-node__short {
+.graph-canvas .dependency-node__short {
   fill: currentColor;
   font-size: 10px;
   font-weight: 800;
   pointer-events: none;
 }
 
-.graph-canvas .graph-node__label {
+.graph-canvas .dependency-node__label {
   fill: #94a3b8;
   font-size: 10px;
   pointer-events: none;
 }
 
-.graph-canvas .graph-node:hover circle,
-.graph-canvas .graph-node:focus-visible circle,
-.graph-canvas .graph-node--selected circle {
-  r: 22px;
+.graph-canvas .dependency-node:hover circle,
+.graph-canvas .dependency-node:focus-visible circle,
+.graph-canvas .dependency-node--selected circle {
+  transform: scale(1.18);
   fill: rgba(12, 28, 45, 0.98);
 }
 
-.graph-canvas .graph-node--muted {
+.graph-canvas .dependency-node--muted {
   opacity: 0.2;
+}
+
+.dependency-node--service {
+  color: var(--brand-400);
+}
+
+.dependency-node--module {
+  color: var(--accent-400);
+}
+
+.dependency-node--test {
+  color: #facc15;
+}
+
+.dependency-node--config {
+  color: #94a3b8;
 }
 
 .graph-empty {

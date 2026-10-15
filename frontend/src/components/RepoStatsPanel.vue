@@ -70,7 +70,7 @@ function asPercent(value: number) {
           v-for="segment in languageSegments"
           :key="segment.label"
           :class="segment.className"
-          :style="{ flexGrow: Math.max(segment.count, 1) }"
+          :style="{ flexGrow: segment.count, display: segment.count ? undefined : 'none' }"
         />
       </div>
       <div class="language-legend">

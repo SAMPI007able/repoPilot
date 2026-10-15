@@ -204,6 +204,14 @@ class RepositoryIndexerService:
         normalized = file_name.lower()
         for marker in (".test.", ".spec."):
             normalized = normalized.replace(marker, ".")
+        if normalized.startswith("test_"):
+            normalized = normalized[5:]
+        if normalized.endswith("_test.py"):
+            normalized = normalized[:-8] + ".py"
+        elif normalized.endswith("tests.java"):
+            normalized = normalized[:-10] + ".java"
+        elif normalized.endswith("test.java"):
+            normalized = normalized[:-9] + ".java"
         return normalized
 
     def _is_test_file(self, path: str) -> bool:
