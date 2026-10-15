@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { MailCheck, RefreshCw } from '@lucide/vue'
 import { useRoute, useRouter } from 'vue-router'
 import Landing from '../components/Landing.vue'
 import SignInModal from '../components/SignInModal.vue'
@@ -18,20 +19,23 @@ const previewStore = usePreviewStore()
 const route = useRoute()
 const router = useRouter()
 const signInOpen = ref(false)
+const verificationError = ref<string | null>(null)
 const repositoriesPage = computed(() => route.name === 'repositories')
+const verificationRequired = computed(() => Boolean(auth.user && !auth.user.emailVerified))
 const pendingBuildKey = 'testforge.pendingWorkspaceBuild'
 
 function refreshWorkspacesIfStale() {
-  if (auth.authenticated && document.visibilityState === 'visible') {
+  if (auth.authenticated && !verificationRequired.value && document.visibilityState === 'visible') {
     void workspaceStore.refreshWorkspacesIfStale()
   }
 }
 
-watch(() => auth.authenticated, async (authenticated) => {
+watch([() => auth.authenticated, () => auth.user?.emailVerified], async ([authenticated, emailVerified]) => {
   if (!authenticated) {
     workspaceStore.clearSession()
     return
   }
+  if (!emailVerified) return
 
   void workspaceStore.loadWorkspaces()
   const pendingRepositoryUrl = window.sessionStorage.getItem(pendingBuildKey)
@@ -59,6 +63,7 @@ async function signOut() {
 }
 
 async function requestWorkspaceBuild() {
+  if (verificationRequired.value) return
   if (!workspaceStore.repositoryUrl.trim()) {
     await workspaceStore.createWorkspace()
     return
@@ -78,12 +83,17 @@ async function signIn(method: SignInMethod) {
   await auth.signIn(method)
   if (auth.authenticated) {
     signInOpen.value = false
-    window.sessionStorage.removeItem(pendingBuildKey)
-    if (workspaceStore.repositoryUrl.trim()) await workspaceStore.createWorkspace()
+    if (auth.user?.emailVerified) {
+      window.sessionStorage.removeItem(pendingBuildKey)
+      if (workspaceStore.repositoryUrl.trim()) await workspaceStore.createWorkspace()
+    } else if (workspaceStore.repositoryUrl.trim()) {
+      window.sessionStorage.setItem(pendingBuildKey, workspaceStore.repositoryUrl.trim())
+    }
   }
 }
 
 async function showRepositories() {
+  if (verificationRequired.value) return
   if (!auth.authenticated) {
     signInOpen.value = true
     return
@@ -93,19 +103,39 @@ async function showRepositories() {
 }
 
 async function startNewWorkspace() {
+  if (verificationRequired.value) return
   workspaceStore.startNewWorkspace()
   await router.push({ name: 'home' })
 }
 
 async function selectWorkspace(id: string) {
+  if (verificationRequired.value) return
   await router.push({ name: 'home' })
   await workspaceStore.selectWorkspace(id)
 }
 
 async function importRepository(repository: import('../types/api').ProviderRepository, branch?: string) {
+  if (verificationRequired.value) return
   await router.push({ name: 'home' })
   await workspaceStore.importProviderRepository(repository, branch)
 }
+
+async function refreshVerification() {
+  verificationError.value = null
+  try {
+    const refreshed = await auth.refreshUser()
+    if (!refreshed) return
+    if (!auth.user?.emailVerified) {
+      verificationError.value = 'Verification is not visible yet. Finish the email verification, then try again.'
+    }
+  } catch {
+    verificationError.value = auth.error || 'Unable to refresh your verification status. Please try again.'
+  }
+}
+
+watch(verificationRequired, (required) => {
+  if (!required) verificationError.value = null
+})
 </script>
 
 <template>
@@ -113,14 +143,15 @@ async function importRepository(repository: import('../types/api').ProviderRepos
     <UserMenu
       :user="auth.user"
       :loading="auth.loading"
+      :inert="verificationRequired"
+      :aria-hidden="verificationRequired"
       @sign-in="signInOpen = true"
       @sign-out="signOut"
     />
-    <div v-if="auth.user && !auth.user.emailVerified" class="verification-banner">
-      Verify your email before creating workspaces, running AI requests, or starting previews.
-    </div>
     <Sidebar
       v-if="auth.authenticated"
+      :inert="verificationRequired"
+      :aria-hidden="verificationRequired"
       :workspaces="workspaceStore.workspaces"
       :active-id="workspaceStore.activeId"
       :loading="workspaceStore.loadingList"
@@ -133,9 +164,21 @@ async function importRepository(repository: import('../types/api').ProviderRepos
       @repositories="showRepositories"
     />
 
-    <main class="app-main scrollbar-thin">
+    <main class="app-main scrollbar-thin" :inert="verificationRequired" :aria-hidden="verificationRequired">
+      <Landing
+        v-if="verificationRequired"
+        :repo-url="workspaceStore.repositoryUrl"
+        :docs="workspaceStore.projectDocuments"
+        :busy="false"
+        :error="null"
+        @update:repo-url="workspaceStore.setRepositoryUrl"
+        @update:docs="workspaceStore.setProjectDocuments"
+        @create="requestWorkspaceBuild"
+        @browse-repositories="showRepositories"
+      />
+
       <RepositoriesPage
-        v-if="repositoriesPage"
+        v-else-if="repositoriesPage"
         :busy="workspaceStore.busy"
         @back="startNewWorkspace"
         @import="importRepository"
@@ -167,6 +210,34 @@ async function importRepository(repository: import('../types/api').ProviderRepos
         @browse-repositories="showRepositories"
       />
     </main>
+    <div
+      v-if="verificationRequired"
+      class="verification-overlay"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="verification-title"
+      aria-describedby="verification-description"
+    >
+      <section class="verification-card">
+        <div class="verification-card__icon" aria-hidden="true"><MailCheck /></div>
+        <p class="verification-card__eyebrow">One step remaining</p>
+        <h1 id="verification-title">Verify your email to continue</h1>
+        <p id="verification-description">
+          Check <strong>{{ auth.user?.primaryEmail }}</strong> for the verification email. Workspaces, AI requests,
+          repository connections, and previews stay paused until your address is verified.
+        </p>
+        <button
+          class="verification-card__refresh"
+          type="button"
+          :disabled="auth.loading"
+          @click="refreshVerification"
+        >
+          <RefreshCw :class="{ spin: auth.loading }" aria-hidden="true" />
+          {{ auth.loading ? 'Checking verification…' : 'I’ve verified — refresh' }}
+        </button>
+        <p v-if="verificationError" class="verification-card__error" role="alert">{{ verificationError }}</p>
+      </section>
+    </div>
     <SignInModal
       v-if="signInOpen"
       :busy="auth.loading"

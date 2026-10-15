@@ -195,6 +195,29 @@ export const useAuthStore = defineStore('auth', () => {
     }
   }
 
+  async function refreshUser() {
+    loading.value = true
+    error.value = null
+    try {
+      if (mode !== 'development') {
+        try {
+          oidcUser.value = await oidcManager().signinSilent()
+        } catch {
+          await oidcManager().signinRedirect({ prompt: 'none' })
+          return false
+        }
+      }
+      user.value = await getCurrentUser()
+      identifyUser(user.value)
+      return true
+    } catch (caught) {
+      error.value = caught instanceof Error ? caught.message : 'Unable to refresh your verification status.'
+      throw caught
+    } finally {
+      loading.value = false
+    }
+  }
+
   async function signOut() {
     user.value = null
     error.value = null
@@ -224,6 +247,7 @@ export const useAuthStore = defineStore('auth', () => {
     initialize,
     signIn,
     completeSignIn,
+    refreshUser,
     signOut,
     accessToken,
   }
