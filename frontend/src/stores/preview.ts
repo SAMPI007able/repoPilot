@@ -1,6 +1,6 @@
 import { ref } from 'vue'
 import { defineStore } from 'pinia'
-import posthog from 'posthog-js'
+import { captureTelemetry } from '../services/telemetry'
 import {
   apiBaseUrl,
   extractAPIError,
@@ -40,6 +40,8 @@ export const usePreviewStore = defineStore('preview', () => {
   const concurrencyBlocked = ref(false)
   let eventAbortController: AbortController | null = null
   let countdownTimer: number | null = null
+  let refreshTimer: number | null = null
+  let refreshInFlight = false
 
   async function load(nextWorkspaceId: string) {
     disconnectEvents()
@@ -120,8 +122,13 @@ export const usePreviewStore = defineStore('preview', () => {
       activePreview.value = await getLatestPreview(nextWorkspaceId)
       initializeEnvironment()
       await refreshLogs()
-      if (!isTerminal(activePreview.value.status)) connectEvents(activePreview.value.id)
-      startCountdown()
+      if (!isTerminal(activePreview.value.status)) {
+        connectEvents(activePreview.value.id)
+        startCountdown()
+      } else {
+        stopCountdown()
+        updateCountdown()
+      }
     } catch (caughtError) {
       if (extractStatus(caughtError) !== 404) {
         error.value = extractPreviewError(caughtError, 'Failed to restore the latest preview.')
@@ -135,10 +142,11 @@ export const usePreviewStore = defineStore('preview', () => {
     error.value = null
     try {
       concurrencyBlocked.value = false
+      stopCountdown()
       activePreview.value = await createPreview(
         workspaceId.value, environment.value, crypto.randomUUID(),
       )
-      if (typeof posthog?.capture === 'function') posthog.capture('preview_started', {
+      captureTelemetry('preview_started', {
         workspace_id: workspaceId.value,
         preview_id: activePreview.value.id,
       })
@@ -161,11 +169,13 @@ export const usePreviewStore = defineStore('preview', () => {
     error.value = null
     try {
       activePreview.value = await stopPreview(activePreview.value.id)
-      if (typeof posthog?.capture === 'function') posthog.capture('preview_completed', {
+      captureTelemetry('preview_completed', {
         preview_id: activePreview.value.id,
         status: activePreview.value.status,
       })
       concurrencyBlocked.value = false
+      disconnectEvents()
+      stopCountdown()
     } catch (caughtError) {
       error.value = extractPreviewError(caughtError, 'Failed to stop the preview.')
     } finally {
@@ -179,7 +189,7 @@ export const usePreviewStore = defineStore('preview', () => {
     error.value = null
     try {
       activePreview.value = await extendPreview(activePreview.value.id)
-      if (typeof posthog?.capture === 'function') posthog.capture('preview_started', {
+      captureTelemetry('preview_started', {
         preview_id: activePreview.value.id,
         extended: true,
       })
@@ -228,11 +238,10 @@ export const usePreviewStore = defineStore('preview', () => {
           const data = block.split('\n').find((line) => line.startsWith('data: '))?.slice(6)
           if (data) {
             const event = JSON.parse(data) as PreviewEvent
-            if (!events.value.some((item) => item.id === event.id)) events.value.push(event)
-            activePreview.value = await getPreview(previewId)
-            await refreshLogs()
-            updateCountdown()
-            if (isTerminal(activePreview.value.status)) disconnectEvents()
+            if (!events.value.some((item) => item.id === event.id)) {
+              events.value = [...events.value.slice(-199), event]
+            }
+            scheduleRefresh(previewId)
           }
           boundary = buffer.indexOf('\n\n')
         }
@@ -251,10 +260,37 @@ export const usePreviewStore = defineStore('preview', () => {
     }
   }
 
+  function scheduleRefresh(previewId: string) {
+    if (refreshTimer !== null || refreshInFlight) return
+    refreshTimer = window.setTimeout(async () => {
+      refreshTimer = null
+      refreshInFlight = true
+      try {
+        if (activePreview.value?.id !== previewId) return
+        const refreshedPreview = await getPreview(previewId)
+        if (activePreview.value?.id !== previewId) return
+        activePreview.value = refreshedPreview
+        await refreshLogs()
+        updateCountdown()
+        if (activePreview.value && isTerminal(activePreview.value.status)) {
+          disconnectEvents()
+          stopCountdown()
+        }
+      } finally {
+        refreshInFlight = false
+      }
+    }, 750)
+  }
+
   function startCountdown() {
-    if (countdownTimer !== null) window.clearInterval(countdownTimer)
+    stopCountdown()
     updateCountdown()
     countdownTimer = window.setInterval(updateCountdown, 1000)
+  }
+
+  function stopCountdown() {
+    if (countdownTimer !== null) window.clearInterval(countdownTimer)
+    countdownTimer = null
   }
 
   function updateCountdown() {
@@ -266,12 +302,13 @@ export const usePreviewStore = defineStore('preview', () => {
   function disconnectEvents() {
     eventAbortController?.abort()
     eventAbortController = null
+    if (refreshTimer !== null) window.clearTimeout(refreshTimer)
+    refreshTimer = null
   }
 
   function clearSession() {
     disconnectEvents()
-    if (countdownTimer !== null) window.clearInterval(countdownTimer)
-    countdownTimer = null
+    stopCountdown()
     workspaceId.value = null
     instructions.value = ''
     record.value = null

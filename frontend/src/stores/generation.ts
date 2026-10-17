@@ -1,6 +1,6 @@
 import { computed, ref, watch } from 'vue'
 import { defineStore } from 'pinia'
-import posthog from 'posthog-js'
+import { captureTelemetry } from '../services/telemetry'
 import { analyzeImpact, extractAPIError, generateTests, getLatestChatSession, streamChatQuery } from '../services/api'
 import { useWorkspaceStore } from './workspace'
 import { useFeatureFlagStore } from './features'
@@ -87,7 +87,7 @@ export const useGenerationStore = defineStore('generation', () => {
     })
 
     try {
-      if (typeof posthog?.capture === 'function') posthog.capture('chat_message', {
+      captureTelemetry('chat_message', {
         workspace_id: workspaceId,
         query_length: queryText.length,
       })

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 
 const props = defineProps<{
   code: string
@@ -9,13 +9,15 @@ const copied = ref(false)
 const useFallback = ref(false)
 const container = ref<HTMLElement | null>(null)
 const editor = ref<any>(null)
+let copyTimer: number | null = null
 
 const codeValue = computed(() => props.code || '# Generated tests will appear here.')
 
 async function copyCode() {
   await navigator.clipboard.writeText(codeValue.value)
   copied.value = true
-  window.setTimeout(() => {
+  if (copyTimer !== null) window.clearTimeout(copyTimer)
+  copyTimer = window.setTimeout(() => {
     copied.value = false
   }, 1400)
 }
@@ -42,6 +44,12 @@ onMounted(async () => {
   } catch {
     useFallback.value = true
   }
+})
+
+onBeforeUnmount(() => {
+  if (copyTimer !== null) window.clearTimeout(copyTimer)
+  editor.value?.dispose?.()
+  editor.value = null
 })
 
 watch(codeValue, (nextValue) => {

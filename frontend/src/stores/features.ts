@@ -9,6 +9,7 @@ const safeDefaults: Record<FeatureFlagKey, boolean> = {
   uploads: true,
   code_quality: false,
 }
+let loadingPromise: Promise<void> | null = null
 
 export const useFeatureFlagStore = defineStore('featureFlags', () => {
   const flags = ref<Record<string, boolean>>({ ...safeDefaults })
@@ -23,13 +24,21 @@ export const useFeatureFlagStore = defineStore('featureFlags', () => {
 
   async function load(force = false): Promise<void> {
     if (loaded.value && !force) return
+    if (loadingPromise && !force) return loadingPromise
+    loadingPromise = (async () => {
+      try {
+        const response = await getFeatureFlags()
+        flags.value = { ...safeDefaults, ...response.flags }
+      } catch {
+        flags.value = { ...safeDefaults }
+      } finally {
+        loaded.value = true
+      }
+    })()
     try {
-      const response = await getFeatureFlags()
-      flags.value = { ...safeDefaults, ...response.flags }
-    } catch {
-      flags.value = { ...safeDefaults }
+      await loadingPromise
     } finally {
-      loaded.value = true
+      loadingPromise = null
     }
   }
 

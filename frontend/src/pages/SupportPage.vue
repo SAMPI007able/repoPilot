@@ -1,16 +1,17 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, defineAsyncComponent, onMounted, ref } from 'vue'
 import { ArrowLeft, ChevronDown, LifeBuoy, RefreshCw, Send, ShieldCheck } from '@lucide/vue'
-import SupportEditor from '../components/SupportEditor.vue'
 import { useAuthStore } from '../stores/auth'
 import { createSupportTicket, extractAPIError, listMySupportTickets } from '../services/api'
 import { supportCategoryLabels, supportCategoryOptions, supportStatusLabels } from '../support/labels'
 import type { SupportCategory, SupportTicket } from '../types/api'
 
 const auth = useAuthStore()
+const SupportEditor = defineAsyncComponent(() => import('../components/SupportEditor.vue'))
 const category = ref<SupportCategory | ''>('')
 const subject = ref('')
 const description = ref('')
+const richEditorReady = ref(false)
 const submitting = ref(false)
 const formError = ref('')
 const successMessage = ref('')
@@ -106,8 +107,29 @@ onMounted(loadTickets)
             <input v-model="subject" class="input" maxlength="200" placeholder="Short summary of the issue" :disabled="submitting" required>
           </label>
           <div class="support-field">
-            <span>Description</span>
-            <SupportEditor v-model="description" :disabled="submitting" placeholder="Steps to reproduce, what you expected, and what happened…" />
+            <span>
+              Description
+              <button
+                v-if="!richEditorReady"
+                class="support-editor-enable"
+                type="button"
+                @click="richEditorReady = true"
+              >Enable rich formatting</button>
+            </span>
+            <SupportEditor
+              v-if="richEditorReady"
+              v-model="description"
+              :disabled="submitting"
+              placeholder="Steps to reproduce, what you expected, and what happened…"
+            />
+            <textarea
+              v-else
+              v-model="description"
+              class="input support-description-fallback"
+              :disabled="submitting"
+              placeholder="Steps to reproduce, what you expected, and what happened…"
+              rows="8"
+            />
           </div>
           <p v-if="formError" class="error-text" role="alert">{{ formError }}</p>
           <p v-if="successMessage" class="support-success" role="status">{{ successMessage }}</p>

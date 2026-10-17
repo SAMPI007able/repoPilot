@@ -1,16 +1,12 @@
 <script setup lang="ts">
 import { AlertTriangle, FlaskConical, GitBranch, GitCompare, LoaderCircle, MessageSquareText, MonitorPlay, Network, RefreshCw } from '@lucide/vue'
-import { computed, ref, watch } from 'vue'
-import AskPanel from './AskPanel.vue'
+import { computed, defineAsyncComponent, onBeforeUnmount, ref, shallowRef, watch } from 'vue'
 import BuildPipeline from './BuildPipeline.vue'
 import DependencyGraph from './DependencyGraph.vue'
-import ImpactPanel from './ImpactPanel.vue'
-import InsightsPanel from './InsightsPanel.vue'
 import RepoStatsPanel from './RepoStatsPanel.vue'
-import RealtimePreviewLab from './RealtimePreviewLab.vue'
-import TestGenPanel from './TestGenPanel.vue'
 import { useGenerationStore } from '../stores/generation'
 import { useFeatureFlagStore } from '../stores/features'
+import type { GraphData, GraphLayoutInput } from '../services/graphLayout'
 import type { RepositoryMetadata } from '../types/api'
 import type { WorkspaceListItem, WorkspaceStage } from '../stores/workspace'
 
@@ -32,6 +28,11 @@ const emit = defineEmits<{
 
 const generationStore = useGenerationStore()
 const featureFlags = useFeatureFlagStore()
+const AskPanel = defineAsyncComponent(() => import('./AskPanel.vue'))
+const ImpactPanel = defineAsyncComponent(() => import('./ImpactPanel.vue'))
+const InsightsPanel = defineAsyncComponent(() => import('./InsightsPanel.vue'))
+const RealtimePreviewLab = defineAsyncComponent(() => import('./RealtimePreviewLab.vue'))
+const TestGenPanel = defineAsyncComponent(() => import('./TestGenPanel.vue'))
 
 const safeMetadata = computed<RepositoryMetadata>(() => ({
   repository: props.workspace.repoName,
@@ -60,7 +61,53 @@ const hotspots = computed(() =>
     .slice(0, HOTSPOT_LIMIT)
     .map((file) => ({ path: file.path, score: file.complexity })),
 )
-const graph = computed(() => createGraphData(repositoryMetadata.value))
+const graph = shallowRef<GraphData>({ nodes: [], edges: [] })
+const graphLoading = ref(false)
+let graphWorker: Worker | null = null
+let graphRequestId = 0
+
+function calculateGraph() {
+  const requestId = ++graphRequestId
+  const metadata: GraphLayoutInput = {
+    parsedFiles: repositoryMetadata.value.parsedFiles.map(({ path }) => ({ path })),
+    relationships: repositoryMetadata.value.relationships.map(({ source, target, module }) => ({
+      source,
+      target,
+      module,
+    })),
+  }
+  graphLoading.value = true
+  if (typeof Worker === 'undefined') {
+    window.setTimeout(() => {
+      if (requestId !== graphRequestId) return
+      graph.value = createGraphData(repositoryMetadata.value)
+      graphLoading.value = false
+    })
+    return
+  }
+  if (!graphWorker) {
+    graphWorker = new Worker(new URL('../workers/graphLayout.worker.ts', import.meta.url), { type: 'module' })
+    graphWorker.onmessage = ({ data }: MessageEvent<{ id: number; graph: GraphData }>) => {
+      if (data.id !== graphRequestId) return
+      graph.value = data.graph
+      graphLoading.value = false
+    }
+    graphWorker.onerror = () => {
+      graphWorker?.terminate()
+      graphWorker = null
+      graph.value = createGraphData(repositoryMetadata.value)
+      graphLoading.value = false
+    }
+  }
+  graphWorker.postMessage({ id: requestId, metadata })
+}
+
+watch(
+  () => [repositoryMetadata.value.parsedFiles, repositoryMetadata.value.relationships],
+  calculateGraph,
+  { immediate: true },
+)
+onBeforeUnmount(() => graphWorker?.terminate())
 const selectedBranch = ref(props.workspace.indexedBranch ?? '')
 const availableBranches = computed(() => [...new Set([
   ...(props.workspace.indexedBranch ? [props.workspace.indexedBranch] : []),
@@ -162,7 +209,9 @@ const insightItems = [] as Array<{ title: string; path: string; severity: string
         <span class="panel-heading__meta">{{ graph.nodes.length }} nodes · {{ graph.edges.length }} edges</span>
       </div>
       <DependencyGraph v-if="graph.nodes.length" :nodes="graph.nodes" :edges="graph.edges" />
-      <div v-else class="empty-state-box">Graph preview will appear as soon as repository relationships finish loading.</div>
+      <div v-else class="empty-state-box">
+        {{ graphLoading ? 'Laying out the dependency graph…' : 'Graph preview will appear as soon as repository relationships finish loading.' }}
+      </div>
     </section>
 
     <AskPanel
@@ -419,4 +468,5 @@ function inferKind(path: string) {
   }
   return 'module'
 }
+
 </script>

@@ -1,7 +1,7 @@
 import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
-import posthog from 'posthog-js'
-import { UserManager, WebStorageStateStore, type User } from 'oidc-client-ts'
+import { captureTelemetry, identifyTelemetry, resetTelemetry } from '../services/telemetry'
+import type { User, UserManager } from 'oidc-client-ts'
 import {
   getCurrentUser,
   setAccessTokenProvider,
@@ -15,9 +15,14 @@ const developmentSignedOutKey = 'testforge.developmentSignedOut'
 const oidcAudience = import.meta.env.VITE_OIDC_AUDIENCE || ''
 export type SignInMethod = 'github' | 'google' | 'email'
 let manager: UserManager | null = null
+let oidcModule: Promise<typeof import('oidc-client-ts')> | null = null
 let signInCompletion: Promise<void> | null = null
+let initialization: Promise<void> | null = null
 
-function oidcManager() {
+async function oidcManager() {
+  if (manager) return manager
+  oidcModule ??= import('oidc-client-ts')
+  const { UserManager, WebStorageStateStore } = await oidcModule
   if (manager) return manager
   const authority = import.meta.env.VITE_OIDC_AUTHORITY
   const clientId = import.meta.env.VITE_OIDC_CLIENT_ID
@@ -51,21 +56,15 @@ export const useAuthStore = defineStore('auth', () => {
   let handlingAuthenticationFailure = false
 
   function captureEvent(eventName: string, properties: Record<string, unknown> = {}) {
-    if (!posthog || typeof posthog.capture !== 'function') return
-    if (!user.value?.id) {
-      posthog.capture(eventName, properties)
-      return
-    }
-    posthog.capture(eventName, { ...properties, $user_id: user.value.id })
+    captureTelemetry(eventName, user.value?.id ? { ...properties, $user_id: user.value.id } : properties)
   }
 
   function identifyUser(nextUser: CurrentUser | null) {
-    if (!posthog || typeof posthog.identify !== 'function') return
     if (!nextUser?.id) {
-      posthog.reset()
+      resetTelemetry()
       return
     }
-    posthog.identify(nextUser.id, {
+    identifyTelemetry(nextUser.id, {
       email: nextUser.primaryEmail,
       display_name: nextUser.displayName,
     })
@@ -88,9 +87,8 @@ export const useAuthStore = defineStore('auth', () => {
     }
   }
 
-  function bindOidcEvents() {
+  function bindOidcEvents(oidc: UserManager) {
     if (mode === 'development' || oidcEventsBound) return
-    const oidc = oidcManager()
     oidc.events.addUserLoaded(async (nextUser) => {
       oidcUser.value = nextUser
       user.value = await getCurrentUser()
@@ -111,24 +109,33 @@ export const useAuthStore = defineStore('auth', () => {
 
   async function initialize() {
     if (initialized.value) return
-    loading.value = true
-    setAccessTokenProvider(accessToken)
-    setAuthenticationFailureHandler(handleAuthenticationFailure)
+    if (initialization) return initialization
+    initialization = (async () => {
+      loading.value = true
+      setAccessTokenProvider(accessToken)
+      setAuthenticationFailureHandler(handleAuthenticationFailure)
+      try {
+        if (mode !== 'development') {
+          const oidc = await oidcManager()
+          bindOidcEvents(oidc)
+          oidcUser.value = await oidc.getUser()
+        }
+        if (await accessToken()) {
+          user.value = await getCurrentUser()
+          identifyUser(user.value)
+        }
+      } catch (caught) {
+        user.value = null
+        error.value = caught instanceof Error ? caught.message : 'Authentication failed.'
+      } finally {
+        initialized.value = true
+        loading.value = false
+      }
+    })()
     try {
-      if (mode !== 'development') {
-        bindOidcEvents()
-        oidcUser.value = await oidcManager().getUser()
-      }
-      if (await accessToken()) {
-        user.value = await getCurrentUser()
-        identifyUser(user.value)
-      }
-    } catch (caught) {
-      user.value = null
-      error.value = caught instanceof Error ? caught.message : 'Authentication failed.'
+      await initialization
     } finally {
-      initialized.value = true
-      loading.value = false
+      initialization = null
     }
   }
 
@@ -158,7 +165,7 @@ export const useAuthStore = defineStore('auth', () => {
     const extraQueryParams: Record<string, string> = {}
     if (oidcAudience) extraQueryParams.audience = oidcAudience
     if (connection) extraQueryParams[parameter] = connection
-    await oidcManager().signinRedirect(
+    await (await oidcManager()).signinRedirect(
       Object.keys(extraQueryParams).length ? { extraQueryParams } : undefined,
     )
   }
@@ -168,7 +175,7 @@ export const useAuthStore = defineStore('auth', () => {
     signInCompletion = (async () => {
       loading.value = true
       try {
-        const oidc = oidcManager()
+        const oidc = await oidcManager()
         let completedUser: User | null
         try {
           completedUser = await oidc.signinRedirectCallback()
@@ -201,9 +208,9 @@ export const useAuthStore = defineStore('auth', () => {
     try {
       if (mode !== 'development') {
         try {
-          oidcUser.value = await oidcManager().signinSilent()
+          oidcUser.value = await (await oidcManager()).signinSilent()
         } catch {
-          await oidcManager().signinRedirect({ prompt: 'none' })
+          await (await oidcManager()).signinRedirect({ prompt: 'none' })
           return false
         }
       }
@@ -227,7 +234,7 @@ export const useAuthStore = defineStore('auth', () => {
       return
     }
     oidcUser.value = null
-    const oidc = oidcManager()
+    const oidc = await oidcManager()
     handlingAuthenticationFailure = true
     try {
       await oidc.removeUser()

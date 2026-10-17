@@ -123,8 +123,9 @@ from app.services.email_service import EmailService, EmailSettings
 from app.services.support_service import MAX_ATTACHMENT_BYTES, SupportService, SupportValidationError
 
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 
-app = FastAPI(title="TestForge AI")
+app = FastAPI(title="RepoPilot")
 telemetry = Telemetry()
 
 
@@ -233,6 +234,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.add_middleware(GZipMiddleware, minimum_size=1000, compresslevel=5)
 
 # ── Services ────────────────────────────────────────────────────────────────
 repo_service = RepositoryService()

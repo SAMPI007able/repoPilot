@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, watch } from 'vue'
-import posthog from 'posthog-js'
+import { captureTelemetry } from '../services/telemetry'
 import { CheckCircle2, Clock3, ExternalLink, FlaskConical, Info, ShieldAlert, Sparkles, Square, Terminal } from '@lucide/vue'
 import { usePreviewStore } from '../stores/preview'
 
@@ -41,9 +41,7 @@ function parseEnvironmentNames(value: string) {
 }
 
 function captureBrowserOpened(source: string) {
-  if (typeof posthog?.capture === 'function') {
-    posthog.capture('browser_opened', { source })
-  }
+  captureTelemetry('browser_opened', { source })
 }
 </script>
 

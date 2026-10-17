@@ -100,6 +100,8 @@ onBeforeUnmount(() => {
             v-if="avatarUrl"
             :src="avatarUrl"
             :alt="`${displayName} avatar`"
+            decoding="async"
+            fetchpriority="low"
             referrerpolicy="no-referrer"
             @error="imageFailed = true"
           />

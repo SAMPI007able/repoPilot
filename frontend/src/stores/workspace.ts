@@ -1,6 +1,6 @@
 import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
-import posthog from 'posthog-js'
+import { captureTelemetry } from '../services/telemetry'
 import {
   deletePersistedWorkspace,
   extractAPIError,
@@ -42,6 +42,11 @@ export interface WorkspaceStage {
 
 function wait(ms: number) {
   return new Promise((resolve) => window.setTimeout(resolve, ms))
+}
+
+function pollDelay(attempt: number) {
+  if (document.hidden) return 5000
+  return Math.min(600 * (1.35 ** attempt), 2000)
 }
 
 export const useWorkspaceStore = defineStore('workspace', () => {
@@ -186,16 +191,16 @@ export const useWorkspaceStore = defineStore('workspace', () => {
 
     try {
       const captureProperties = { repository_url: repositoryUrl.value.trim(), document_count: projectDocuments.value.length }
-      if (projectDocuments.value.length > 0 && typeof posthog?.capture === 'function') {
-        posthog.capture('document_uploaded', {
+      if (projectDocuments.value.length > 0) {
+        captureTelemetry('document_uploaded', {
           source: 'workspace_index',
           repository_url: repositoryUrl.value.trim(),
           document_count: projectDocuments.value.length,
         })
       }
       let buildJob = await startWorkspaceBuild(repositoryUrl.value.trim(), projectDocuments.value)
-      if (typeof posthog?.capture === 'function') posthog.capture('repo_connected', captureProperties)
-      if (typeof posthog?.capture === 'function') posthog.capture('repo_indexed', { workspace_id: buildJob.workspaceId, ...captureProperties })
+      captureTelemetry('repo_connected', captureProperties)
+      captureTelemetry('repo_indexed', { workspace_id: buildJob.workspaceId, ...captureProperties })
       const persistedWorkspaceId = buildJob.workspaceId
       replaceWorkspaceId(workspaceId, persistedWorkspaceId, buildJob.jobId)
       workspaceId = persistedWorkspaceId
@@ -205,8 +210,9 @@ export const useWorkspaceStore = defineStore('workspace', () => {
         stages: mapBuildStages(buildJob.stages),
       })
 
+      let pollAttempt = 0
       while (buildJob.status === 'queued' || buildJob.status === 'running') {
-        await wait(400)
+        await wait(pollDelay(pollAttempt++))
         buildJob = await getWorkspaceBuild(buildJob.jobId)
         patchWorkspace(workspaceId, {
           status: buildJob.status === 'failed' ? 'failed' : 'building',
@@ -261,13 +267,14 @@ export const useWorkspaceStore = defineStore('workspace', () => {
         branch: branch || repository.defaultBranch,
       }
       let buildJob = await startProviderRepositoryImport(repository, branch)
-      if (typeof posthog?.capture === 'function') posthog.capture('repo_connected', captureProperties)
-      if (typeof posthog?.capture === 'function') posthog.capture('repo_indexed', { workspace_id: buildJob.workspaceId, ...captureProperties })
+      captureTelemetry('repo_connected', captureProperties)
+      captureTelemetry('repo_indexed', { workspace_id: buildJob.workspaceId, ...captureProperties })
       replaceWorkspaceId(workspaceId, buildJob.workspaceId, buildJob.jobId)
       workspaceId = buildJob.workspaceId
       patchWorkspace(workspaceId, { status: 'building', jobId: buildJob.jobId, stages: mapBuildStages(buildJob.stages) })
+      let pollAttempt = 0
       while (buildJob.status === 'queued' || buildJob.status === 'running') {
-        await wait(400)
+        await wait(pollDelay(pollAttempt++))
         buildJob = await getWorkspaceBuild(buildJob.jobId)
         patchWorkspace(workspaceId, { status: buildJob.status === 'failed' ? 'failed' : 'building', stages: mapBuildStages(buildJob.stages) })
       }
@@ -387,8 +394,9 @@ export const useWorkspaceStore = defineStore('workspace', () => {
         jobId: buildJob.jobId,
         stages: mapBuildStages(buildJob.stages),
       })
+      let pollAttempt = 0
       while (buildJob.status === 'queued' || buildJob.status === 'running') {
-        await wait(400)
+        await wait(pollDelay(pollAttempt++))
         buildJob = await getWorkspaceBuild(buildJob.jobId)
         patchWorkspace(id, {
           status: buildJob.status === 'failed' ? 'ready' : 'building',

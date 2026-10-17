@@ -107,9 +107,9 @@ export async function disconnectProvider(provider: SourceControlProvider): Promi
   await api.delete(`/integrations/${provider}`)
 }
 
-export async function listProviderRepositories(provider: SourceControlProvider): Promise<ProviderRepository[]> {
+export async function listProviderRepositories(provider: SourceControlProvider, refresh = false): Promise<ProviderRepository[]> {
   return (await api.get<ProviderRepository[]>(`/integrations/${provider}/repos`, {
-    params: { refresh: Date.now() },
+    params: refresh ? { refresh: Date.now() } : undefined,
   })).data
 }
 

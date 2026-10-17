@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import {
   Archive,
   ArrowRight,
@@ -46,6 +46,7 @@ const branchesByRepository = ref<Record<string, string[]>>({})
 const selectedBranches = ref<Record<string, string>>({})
 const loadingBranchIds = ref<Set<string>>(new Set())
 const branchErrors = ref<Record<string, string>>({})
+const visibleLimit = ref(50)
 
 const providerMeta: Record<SourceControlProvider, {
   icon: typeof GitBranch
@@ -65,6 +66,8 @@ const filteredRepositories = computed(() => {
     `${repository.fullName} ${repository.description ?? ''} ${repository.defaultBranch}`.toLocaleLowerCase().includes(query),
   )
 })
+const visibleRepositories = computed(() => filteredRepositories.value.slice(0, visibleLimit.value))
+watch([filter, activeProvider], () => { visibleLimit.value = 50 })
 
 async function loadConnections() {
   loadingConnections.value = true
@@ -89,7 +92,7 @@ async function selectProvider(provider: SourceControlProvider, force = false) {
   loadingRepositories.value = true
   error.value = null
   try {
-    repositories.value = (await listProviderRepositories(provider))
+    repositories.value = (await listProviderRepositories(provider, force))
       .sort((left, right) => (right.updatedAt || '').localeCompare(left.updatedAt || ''))
   } catch (caught) {
     error.value = caught instanceof Error ? caught.message : `Unable to load ${provider} repositories.`
@@ -199,7 +202,7 @@ onMounted(loadConnections)
 
         <div v-if="connection.connected" class="provider-card__account">
           <span class="provider-card__avatar">
-            <img v-if="connection.avatarUrl" :src="connection.avatarUrl" alt="" referrerpolicy="no-referrer">
+            <img v-if="connection.avatarUrl" :src="connection.avatarUrl" alt="" loading="lazy" decoding="async" fetchpriority="low" referrerpolicy="no-referrer">
             <span v-else>{{ (connection.accountName || connection.name).charAt(0).toUpperCase() }}</span>
           </span>
           <span>{{ connection.accountName || 'Connected account' }}</span>
@@ -285,7 +288,7 @@ onMounted(loadConnections)
         {{ repositories.length ? 'No repositories match your filter.' : 'No repositories were returned for this account.' }}
       </div>
       <div v-else-if="activeProvider" class="repository-list">
-        <article v-for="repository in filteredRepositories" :key="repository.id" class="repository-list__item">
+        <article v-for="repository in visibleRepositories" :key="repository.id" class="repository-list__item">
           <div class="repository-list__main">
             <div class="repository-list__title">
               <component :is="providerMeta[repository.provider].icon" aria-hidden="true" />
@@ -334,6 +337,12 @@ onMounted(loadConnections)
             </button>
           </div>
         </article>
+        <button
+          v-if="visibleRepositories.length < filteredRepositories.length"
+          class="repository-results__refresh"
+          type="button"
+          @click="visibleLimit += 50"
+        >Show 50 more</button>
       </div>
     </section>
   </section>

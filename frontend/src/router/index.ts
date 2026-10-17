@@ -1,8 +1,8 @@
 import { createRouter, createWebHistory } from 'vue-router'
-import Home from '../pages/Home.vue'
-import SignIn from '../pages/SignIn.vue'
-import AuthCallback from '../pages/AuthCallback.vue'
-import AdminPage from '../pages/AdminPage.vue'
+const Home = () => import('../pages/Home.vue')
+const SignIn = () => import('../pages/SignIn.vue')
+const AuthCallback = () => import('../pages/AuthCallback.vue')
+const AdminPage = () => import('../pages/AdminPage.vue')
 
 const router = createRouter({
   history: createWebHistory(),

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 
 type GraphNode = { id: string; label: string; short: string; kind: string; x: number; y: number }
 type GraphEdge = { id: string; source: string; target: string; strength: 'normal' | 'strong' }
@@ -11,14 +11,23 @@ const props = defineProps<{
 
 const svgElement = ref<SVGSVGElement | null>(null)
 const searchQuery = ref('')
+const deferredSearchQuery = ref('')
 const kindFilter = ref('all')
 const activeNodeId = ref<string | null>(null)
 const viewBox = ref({ x: 0, y: 0, width: 1000, height: 600 })
 const fittedWidth = ref(1000)
 let dragState: { pointerId: number; x: number; y: number } | null = null
+let searchTimer: number | null = null
+let panFrame: number | null = null
+let pendingPan: { pointerId: number; x: number; y: number } | null = null
+
+watch(searchQuery, (value) => {
+  if (searchTimer !== null) window.clearTimeout(searchTimer)
+  searchTimer = window.setTimeout(() => { deferredSearchQuery.value = value }, 120)
+})
 
 const filteredNodes = computed(() => {
-  const query = searchQuery.value.trim().toLowerCase()
+  const query = deferredSearchQuery.value.trim().toLowerCase()
   return props.nodes.filter((node) =>
     (kindFilter.value === 'all' || node.kind === kindFilter.value) &&
     (!query || node.id.toLowerCase().includes(query) || node.label.toLowerCase().includes(query)),
@@ -137,15 +146,29 @@ function startPan(event: PointerEvent) {
 
 function pan(event: PointerEvent) {
   if (!dragState || dragState.pointerId !== event.pointerId || !svgElement.value) return
-  const rect = svgElement.value.getBoundingClientRect()
-  const deltaX = ((event.clientX - dragState.x) / rect.width) * viewBox.value.width
-  const deltaY = ((event.clientY - dragState.y) / rect.height) * viewBox.value.height
-  viewBox.value = { ...viewBox.value, x: viewBox.value.x - deltaX, y: viewBox.value.y - deltaY }
-  dragState = { ...dragState, x: event.clientX, y: event.clientY }
+  pendingPan = { pointerId: event.pointerId, x: event.clientX, y: event.clientY }
+  if (panFrame !== null) return
+  panFrame = window.requestAnimationFrame(() => {
+    panFrame = null
+    if (!dragState || !pendingPan || !svgElement.value) return
+    const rect = svgElement.value.getBoundingClientRect()
+    const deltaX = ((pendingPan.x - dragState.x) / rect.width) * viewBox.value.width
+    const deltaY = ((pendingPan.y - dragState.y) / rect.height) * viewBox.value.height
+    viewBox.value = { ...viewBox.value, x: viewBox.value.x - deltaX, y: viewBox.value.y - deltaY }
+    dragState = { ...dragState, x: pendingPan.x, y: pendingPan.y }
+    pendingPan = null
+  })
 }
 
 function stopPan(event: PointerEvent) {
-  if (dragState?.pointerId === event.pointerId) dragState = null
+  if (dragState?.pointerId === event.pointerId) {
+    dragState = null
+    pendingPan = null
+  }
+}
+
+function setTransientActiveNode(id: string | null) {
+  if (filteredNodes.value.length <= 750) activeNodeId.value = id
 }
 
 function connectionLabel(count: number) {
@@ -157,6 +180,10 @@ watch([filteredNodes, renderedEdges], () => {
   void nextTick(fitGraph)
 })
 onMounted(fitGraph)
+onBeforeUnmount(() => {
+  if (searchTimer !== null) window.clearTimeout(searchTimer)
+  if (panFrame !== null) window.cancelAnimationFrame(panFrame)
+})
 </script>
 
 <template>
@@ -231,8 +258,9 @@ onMounted(fitGraph)
         role="button"
         tabindex="0"
         :aria-label="`${node.id}, ${connectionLabel(connectionsByNode.get(node.id) ?? 0)}`"
-        @mouseenter="activeNodeId = node.id"
-        @mouseleave="activeNodeId = null"
+        @mouseenter="setTransientActiveNode(node.id)"
+        @mouseleave="setTransientActiveNode(null)"
+        @click="activeNodeId = activeNodeId === node.id ? null : node.id"
         @focus="activeNodeId = node.id"
         @blur="activeNodeId = null"
       >

@@ -1,21 +1,19 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, defineAsyncComponent, onMounted, onUnmounted, ref, watch } from 'vue'
 import { MailCheck, RefreshCw } from '@lucide/vue'
 import { useRoute, useRouter } from 'vue-router'
 import Landing from '../components/Landing.vue'
-import SignInModal from '../components/SignInModal.vue'
 import Sidebar from '../components/Sidebar.vue'
 import UserMenu from '../components/UserMenu.vue'
-import WorkspaceView from '../components/WorkspaceView.vue'
-import RepositoriesPage from './RepositoriesPage.vue'
 import { useWorkspaceStore } from '../stores/workspace'
 import { useAuthStore } from '../stores/auth'
-import { usePreviewStore } from '../stores/preview'
 import type { SignInMethod } from '../stores/auth'
 
 const workspaceStore = useWorkspaceStore()
 const auth = useAuthStore()
-const previewStore = usePreviewStore()
+const SignInModal = defineAsyncComponent(() => import('../components/SignInModal.vue'))
+const WorkspaceView = defineAsyncComponent(() => import('../components/WorkspaceView.vue'))
+const RepositoriesPage = defineAsyncComponent(() => import('./RepositoriesPage.vue'))
 const route = useRoute()
 const router = useRouter()
 const signInOpen = ref(false)
@@ -58,7 +56,8 @@ onUnmounted(() => {
 
 async function signOut() {
   workspaceStore.clearSession()
-  previewStore.clearSession()
+  const { usePreviewStore } = await import('../stores/preview')
+  usePreviewStore().clearSession()
   await auth.signOut()
 }
 
