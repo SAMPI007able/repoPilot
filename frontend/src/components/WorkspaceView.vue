@@ -131,9 +131,22 @@ const insightItems = [] as Array<{ title: string; path: string; severity: string
 <template>
   <div class="workspace-view">
     <header class="workspace-view__header">
-      <div>
+      <div class="workspace-view__title-block">
         <div class="workspace-view__title">{{ workspace.repoName }}</div>
-        <div class="workspace-view__subtitle">{{ workspace.repoUrl }}</div>
+        <div class="workspace-view__subtitle-row">
+          <div class="workspace-view__subtitle">{{ workspace.repoUrl }}</div>
+          <span
+            class="status-pill"
+            :class="workspace.status === 'ready'
+              ? 'status-pill--ready'
+              : workspace.status === 'failed'
+                ? 'status-pill--failed'
+                : 'status-pill--indexing'"
+          >
+            <span class="status-pill__dot" />
+            {{ workspace.status === 'ready' ? 'Workspace ready' : workspace.status === 'failed' ? 'Build failed' : 'Building workspace' }}
+          </span>
+        </div>
       </div>
 
       <div class="workspace-view__actions">
@@ -163,17 +176,6 @@ const insightItems = [] as Array<{ title: string; path: string; severity: string
           </button>
           <span v-if="loadingBranches" class="workspace-branch-control__loading">Loading branches…</span>
         </div>
-        <span
-          class="status-pill"
-          :class="workspace.status === 'ready'
-            ? 'status-pill--ready'
-            : workspace.status === 'failed'
-              ? 'status-pill--failed'
-              : 'status-pill--indexing'"
-        >
-          <span class="status-pill__dot" />
-          {{ workspace.status === 'ready' ? 'Workspace ready' : workspace.status === 'failed' ? 'Build failed' : 'Building workspace' }}
-        </span>
       </div>
     </header>
 

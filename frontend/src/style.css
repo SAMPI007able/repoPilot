@@ -929,10 +929,29 @@ button {
   color: var(--muted);
 }
 
+.workspace-view__title-block {
+  min-width: 0;
+  flex: 0 1 auto;
+}
+
+.workspace-view__subtitle-row {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+  margin-top: 0.2rem;
+}
+
+.workspace-view__subtitle-row .status-pill {
+  font-size: 0.68rem;
+  padding: 0.18rem 0.55rem;
+}
+
 .workspace-view__actions {
   display: flex;
   align-items: flex-end;
   gap: 0.75rem;
+  margin-right: 1rem;
 }
 
 .workspace-branch-control {
@@ -1431,6 +1450,7 @@ button {
   display: grid;
   gap: 0.5rem;
   margin-top: 0.6rem;
+  min-width: 0;
 }
 
 .metric-help {
@@ -1450,9 +1470,21 @@ button {
   background: rgba(15, 23, 39, 0.6);
   padding: 0.5rem 0.7rem;
   font-size: 0.78rem;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.hotspot-item__path {
+  flex: 1 1 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: default;
 }
 
 .hotspot-item strong {
+  flex-shrink: 0;
   color: var(--danger-400);
 }
 
@@ -1961,6 +1993,16 @@ button {
   font-family: 'JetBrains Mono', monospace;
   white-space: pre-wrap;
 }
+
+.results-area--md {
+  max-height: 32rem;
+  overflow-y: auto;
+  padding: 0.25rem 0.15rem;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(34, 211, 238, 0.25) transparent;
+}
+.results-area--md::-webkit-scrollbar { width: 5px; }
+.results-area--md::-webkit-scrollbar-thumb { background: rgba(34, 211, 238, 0.25); border-radius: 99px; }
 
 .ask-panel__composer {
   display: flex;

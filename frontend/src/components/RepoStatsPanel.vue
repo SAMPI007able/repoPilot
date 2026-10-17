@@ -91,7 +91,7 @@ function asPercent(value: number) {
       </div>
       <div class="hotspots-list">
         <div v-for="item in hotspots" :key="item.path" class="hotspot-item">
-          <span>{{ item.path }}</span>
+          <span class="hotspot-item__path" :title="item.path">{{ item.path }}</span>
           <strong>CC {{ item.score }}</strong>
         </div>
         <div v-if="hotspots.length === 0" class="hotspot-item hotspot-item--empty">

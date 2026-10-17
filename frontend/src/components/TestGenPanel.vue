@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { AIQueryResponse } from '../types/api'
+import MarkdownRenderer from './MarkdownRenderer.vue'
 
 defineProps<{
   mode: 'scenario' | 'file'
@@ -130,12 +131,12 @@ const emit = defineEmits<{
       </p>
     </div>
 
-    <div class="results-area">
+    <div class="results-area results-area--md">
       <div v-if="!result && !busy" class="empty-state-box">
         Generated tests will appear here. Each is wired to the modules it exercises.
       </div>
       <div v-else-if="busy" class="empty-state-box">Generating...</div>
-      <pre v-else class="result-code">{{ result?.markdown }}</pre>
+      <MarkdownRenderer v-else :content="result?.markdown ?? ''" />
     </div>
 
     <p v-if="error" class="error-text">{{ error }}</p>
