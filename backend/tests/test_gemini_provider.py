@@ -54,10 +54,34 @@ class GeminiProviderTests(unittest.TestCase):
         )
 
         with self._install_fake_sdk(models):
-            result = provider.generate("prompt")
+            with self.assertLogs("app.services.ai.gemini_provider", level="WARNING") as logs:
+                result = provider.generate("prompt")
 
         self.assertEqual(result, "generated tests")
         self.assertEqual(models.calls, ["gemini-3.5-flash", "gemini-3.1-flash-lite"])
+        self.assertEqual(logs.records[0].errorCode, "503")
+        self.assertEqual(logs.records[0].errorMessage, "503 UNAVAILABLE")
+        self.assertTrue(logs.records[0].retryable)
+        self.assertIn("error=503 UNAVAILABLE", logs.output[0])
+
+    def test_redacts_api_key_from_provider_error_logs(self) -> None:
+        error = FakeGeminiError(503)
+        error.args = (f"{error} secret-test-key",)
+        models = FakeModels([error, FakeGeminiError(503)])
+        provider = GeminiProvider(
+            api_key="secret-test-key",
+            fallback_models=["gemini-3.1-flash-lite"],
+        )
+
+        with self._install_fake_sdk(models), self.assertLogs(
+            "app.services.ai.gemini_provider",
+            level="WARNING",
+        ) as logs:
+            with self.assertRaises(AIProviderUnavailableError):
+                provider.generate("prompt")
+
+        self.assertEqual(logs.records[0].errorMessage, "503 UNAVAILABLE [REDACTED]")
+        self.assertNotIn("secret-test-key", logs.output[0])
 
     def test_applies_configured_thinking_level(self) -> None:
         models = FakeModels([types.SimpleNamespace(text="answer")])

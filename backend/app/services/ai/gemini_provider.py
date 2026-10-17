@@ -1,8 +1,12 @@
+import logging
 import os
 import re
 from collections.abc import Iterator
 
 from app.services.ai.provider import AIProvider, AIProviderUnavailableError
+
+
+logger = logging.getLogger(__name__)
 
 
 class GeminiProvider(AIProvider):
@@ -39,7 +43,7 @@ class GeminiProvider(AIProvider):
         models = [self.model, *self.fallback_models]
         last_error: Exception | None = None
 
-        for model_name in models:
+        for attempt, model_name in enumerate(models, start=1):
             try:
                 response = client.models.generate_content(
                     model=model_name,
@@ -47,7 +51,9 @@ class GeminiProvider(AIProvider):
                     config=self._generation_config(),
                 )
             except Exception as exc:
-                if not self._is_retryable(exc):
+                retryable = self._is_retryable(exc)
+                self._log_attempt_failure(model_name, attempt, exc, retryable)
+                if not retryable:
                     raise
                 last_error = exc
                 continue
@@ -70,7 +76,7 @@ class GeminiProvider(AIProvider):
         models = [self.model, *self.fallback_models]
         last_error: Exception | None = None
 
-        for model_name in models:
+        for attempt, model_name in enumerate(models, start=1):
             emitted = False
             try:
                 for chunk in client.models.generate_content_stream(
@@ -85,7 +91,17 @@ class GeminiProvider(AIProvider):
             except Exception as exc:
                 # Once text has reached the client, falling back would duplicate or
                 # contradict the partial answer. Surface the interruption instead.
-                if emitted or not self._is_retryable(exc):
+                retryable = self._is_retryable(exc)
+                will_retry = retryable and not emitted
+                self._log_attempt_failure(
+                    model_name,
+                    attempt,
+                    exc,
+                    retryable,
+                    streaming=True,
+                    emitted=emitted,
+                )
+                if not will_retry:
                     raise
                 last_error = exc
                 continue
@@ -113,6 +129,51 @@ class GeminiProvider(AIProvider):
 
     def _generation_config(self) -> dict:
         return {"thinking_config": {"thinking_level": self.thinking_level}}
+
+    def _log_attempt_failure(
+        self,
+        model_name: str,
+        attempt: int,
+        error: Exception,
+        retryable: bool,
+        *,
+        streaming: bool = False,
+        emitted: bool = False,
+    ) -> None:
+        code = getattr(error, "code", None)
+        status = getattr(error, "status", None)
+        status_code = getattr(error, "status_code", None)
+        error_message = str(error)
+        if self.api_key:
+            error_message = error_message.replace(self.api_key, "[REDACTED]")
+
+        logger.warning(
+            "Gemini model request failed: model=%s attempt=%d streaming=%s "
+            "retryable=%s partial_response_emitted=%s error_type=%s "
+            "error_code=%s error_status=%s http_status=%s error=%s",
+            model_name,
+            attempt,
+            streaming,
+            retryable,
+            emitted,
+            type(error).__name__,
+            code,
+            status,
+            status_code,
+            error_message[:2000],
+            extra={
+                "geminiModel": model_name,
+                "attempt": attempt,
+                "streaming": streaming,
+                "retryable": retryable,
+                "partialResponseEmitted": emitted,
+                "errorType": type(error).__name__,
+                "errorCode": str(code) if code is not None else None,
+                "errorStatus": str(status) if status is not None else None,
+                "httpStatus": str(status_code) if status_code is not None else None,
+                "errorMessage": error_message[:2000],
+            },
+        )
 
     def _is_retryable(self, error: Exception) -> bool:
         code = getattr(error, "code", None)
