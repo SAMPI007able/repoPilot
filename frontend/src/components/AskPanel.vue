@@ -2,6 +2,7 @@
 import { MessageSquareText, Plus, SendHorizontal, Sparkles } from '@lucide/vue'
 import { nextTick, ref, watch } from 'vue'
 import type { ChatMessage } from '../types/api'
+import MarkdownRenderer from './MarkdownRenderer.vue'
 
 const props = defineProps<{
   workspaceName: string
@@ -57,7 +58,8 @@ watch(
       </div>
       <div v-for="message in messages" :key="message.id" class="ask-panel__message" :class="`ask-panel__message--${message.role}`">
         <span class="ask-panel__role">{{ message.role === 'user' ? 'You' : 'RepoPilot' }}</span>
-        <pre>{{ message.content }}</pre>
+        <MarkdownRenderer v-if="message.role === 'assistant'" :content="message.content" />
+        <pre v-else class="ask-panel__user-text">{{ message.content }}</pre>
       </div>
       <div
         v-if="busy && (!messages.length || messages[messages.length - 1]?.role !== 'assistant')"

@@ -1949,7 +1949,6 @@ button {
   text-transform: uppercase;
 }
 
-.ask-panel__message pre,
 .ask-panel__message p {
   margin: 0;
   border: 1px solid rgba(58, 74, 114, 0.55);
@@ -1963,10 +1962,34 @@ button {
   white-space: pre-wrap;
 }
 
-.ask-panel__message--user pre {
-  border-color: rgba(124, 92, 255, 0.45);
+/* User message bubble */
+.ask-panel__user-text {
+  margin: 0;
+  border: 1px solid rgba(124, 92, 255, 0.45);
+  border-radius: 0.9rem;
   background: rgba(124, 92, 255, 0.15);
+  padding: 0.8rem 0.95rem;
   color: #eef2ff;
+  font-family: inherit;
+  font-size: 0.8rem;
+  line-height: 1.6;
+  white-space: pre-wrap;
+}
+
+/* Assistant markdown bubble */
+.ask-panel__message--assistant .md-body {
+  border: 1px solid rgba(58, 74, 114, 0.45);
+  border-radius: 0.9rem;
+  background: rgba(10, 18, 31, 0.6);
+  padding: 0.85rem 1rem;
+}
+
+.ask-panel__message--assistant .md-body > :first-child {
+  margin-top: 0;
+}
+
+.ask-panel__message--assistant .md-body > :last-child {
+  margin-bottom: 0;
 }
 
 .ask-panel__message--thinking p {
