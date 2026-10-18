@@ -22,13 +22,21 @@ class TestGenerationCapability(AICapability):
         target: str,
         test_type: str,
     ) -> tuple[str, str]:
+        prompt = self.prepare(repository_metadata, target, test_type)
+        return prompt, self.generate_prepared(prompt)
+
+    def prepare(
+        self,
+        repository_metadata: RepositoryMetadata,
+        target: str,
+        test_type: str,
+    ) -> str:
         context = self.context_builder.build_context(
             repository_metadata=repository_metadata,
             target=target,
             test_type=test_type,
         )
-        prompt = self.prompt_builder.build_prompt(context)
-        return prompt, self.provider.generate(prompt)
+        return self.prompt_builder.build_prompt(context)
 
     def execute_scenario(
         self,
@@ -36,10 +44,21 @@ class TestGenerationCapability(AICapability):
         scenario: str,
         test_type: str,
     ) -> tuple[str, str]:
+        prompt = self.prepare_scenario(repository_metadata, scenario, test_type)
+        return prompt, self.generate_prepared(prompt)
+
+    def prepare_scenario(
+        self,
+        repository_metadata: RepositoryMetadata,
+        scenario: str,
+        test_type: str,
+    ) -> str:
         context = self.context_builder.build_scenario_context(
             repository_metadata=repository_metadata,
             scenario=scenario,
             test_type=test_type,
         )
-        prompt = self.prompt_builder.build_scenario_prompt(context)
-        return prompt, self.provider.generate(prompt)
+        return self.prompt_builder.build_scenario_prompt(context)
+
+    def generate_prepared(self, prompt: str) -> str:
+        return self.provider.generate(prompt)

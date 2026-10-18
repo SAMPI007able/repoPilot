@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, JSON, String, Text, UniqueConstraint
+from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, Index, JSON, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
@@ -37,6 +37,9 @@ class UserRow(Base):
         back_populates="user", cascade="all, delete-orphan"
     )
     chat_sessions: Mapped[list["ChatSessionRow"]] = relationship(
+        back_populates="user", cascade="all, delete-orphan"
+    )
+    test_generations: Mapped[list["TestGenerationRow"]] = relationship(
         back_populates="user", cascade="all, delete-orphan"
     )
 
@@ -142,6 +145,9 @@ class WorkspaceRow(Base):
         back_populates="workspace", cascade="all, delete-orphan"
     )
     chat_sessions: Mapped[list["ChatSessionRow"]] = relationship(
+        back_populates="workspace", cascade="all, delete-orphan"
+    )
+    test_generations: Mapped[list["TestGenerationRow"]] = relationship(
         back_populates="workspace", cascade="all, delete-orphan"
     )
     owner: Mapped[UserRow | None] = relationship(back_populates="workspaces")
@@ -374,3 +380,33 @@ class ChatMessageRow(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now, index=True)
 
     session: Mapped[ChatSessionRow] = relationship(back_populates="messages")
+
+
+class TestGenerationRow(Base):
+    __tablename__ = "test_generations"
+    __table_args__ = (
+        Index("ix_test_generations_owner_workspace_created", "user_id", "workspace_id", "created_at"),
+        Index("ix_test_generations_owner_workspace_hash", "user_id", "workspace_id", "request_hash"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    user_id: Mapped[str] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    workspace_id: Mapped[str] = mapped_column(
+        ForeignKey("workspaces.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    mode: Mapped[str] = mapped_column(String(16), nullable=False)
+    test_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    target: Mapped[str | None] = mapped_column(Text)
+    scenario: Mapped[str | None] = mapped_column(Text)
+    prompt: Mapped[str] = mapped_column(Text, nullable=False)
+    markdown: Mapped[str] = mapped_column(Text, nullable=False)
+    request_hash: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    cache_hit: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now, index=True
+    )
+
+    user: Mapped[UserRow] = relationship(back_populates="test_generations")
+    workspace: Mapped[WorkspaceRow] = relationship(back_populates="test_generations")

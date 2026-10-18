@@ -45,6 +45,38 @@ class EnvironmentCheckTests(unittest.TestCase):
         self.assertTrue(any("ARTIFACT_STORE" in error for error in errors))
         self.assertTrue(any("PREVIEW_TRUSTED_LOCAL_EXECUTION" in error for error in errors))
 
+    def test_openai_provider_requires_openai_key_instead_of_gemini(self):
+        environment = {
+            "AI_PROVIDER": "openai",
+            "OPENAI_API_KEY": "configured",
+        }
+        with patch.dict(os.environ, environment, clear=True):
+            errors, _ = validate("backend")
+        self.assertFalse(any("OPENAI_API_KEY" in error for error in errors))
+        self.assertFalse(any("GEMINI_API_KEY" in error for error in errors))
+
+    def test_qwen_provider_accepts_dashscope_key_alias(self):
+        environment = {
+            "AI_PROVIDER": "qwen",
+            "DASHSCOPE_API_KEY": "configured",
+            "QWEN_BASE_URL": "https://workspace.example/compatible-mode/v1",
+        }
+        with patch.dict(os.environ, environment, clear=True):
+            errors, _ = validate("backend")
+        self.assertFalse(any("QWEN_API_KEY" in error for error in errors))
+        self.assertFalse(any("GEMINI_API_KEY" in error for error in errors))
+
+    def test_openrouter_provider_requires_only_openrouter_key(self):
+        environment = {
+            "AI_PROVIDER": "openrouter",
+            "OPENROUTER_API_KEY": "sk-or-configured",
+            "OPENROUTER_BASE_URL": "https://openrouter.ai/api/v1",
+        }
+        with patch.dict(os.environ, environment, clear=True):
+            errors, _ = validate("backend")
+        self.assertFalse(any("OPENROUTER_API_KEY" in error for error in errors))
+        self.assertFalse(any("QWEN_API_KEY" in error for error in errors))
+
 
 if __name__ == "__main__":
     unittest.main()

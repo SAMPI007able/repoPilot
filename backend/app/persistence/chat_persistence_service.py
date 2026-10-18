@@ -1,9 +1,10 @@
+import os
 import uuid
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import desc, select
+from sqlalchemy import desc, func, select
 
-from app.models.chat_models import ChatMessage, ChatSession
+from app.models.chat_models import ChatMessage, ChatSession, ChatSessionSummary
 from app.persistence.database import Database
 from app.persistence.models import ChatMessageRow, ChatSessionRow
 
@@ -13,9 +14,24 @@ class ChatSessionNotFoundError(LookupError):
 
 
 class ChatPersistenceService:
-    MAX_CONTEXT_MESSAGES = 12
-    MAX_CONTEXT_CHARACTERS = 16_000
-    MAX_MESSAGE_CHARACTERS = 4_000
+    MAX_CONTEXT_MESSAGES = int(
+        os.getenv(
+            "AI_CHAT_MAX_HISTORY_MESSAGES",
+            os.getenv("GEMINI_CHAT_MAX_HISTORY_MESSAGES", "6"),
+        )
+    )
+    MAX_CONTEXT_CHARACTERS = int(
+        os.getenv(
+            "AI_CHAT_MAX_HISTORY_CHARACTERS",
+            os.getenv("GEMINI_CHAT_MAX_HISTORY_CHARACTERS", "8000"),
+        )
+    )
+    MAX_MESSAGE_CHARACTERS = int(
+        os.getenv(
+            "AI_CHAT_MAX_MESSAGE_CHARACTERS",
+            os.getenv("GEMINI_CHAT_MAX_MESSAGE_CHARACTERS", "3000"),
+        )
+    )
 
     def __init__(self, database: Database) -> None:
         self.database = database
@@ -37,6 +53,7 @@ class ChatPersistenceService:
                 select(ChatSessionRow).where(
                     ChatSessionRow.user_id == user_id,
                     ChatSessionRow.workspace_id == workspace_id,
+                    ChatSessionRow.title.is_not(None),
                 ).order_by(desc(ChatSessionRow.updated_at)).limit(1)
             )
             if row is None:
@@ -46,6 +63,25 @@ class ChatPersistenceService:
                 .order_by(ChatMessageRow.created_at, ChatMessageRow.id)
             ).all()
             return self._to_model(row, messages)
+
+    def list_sessions(self, user_id: str, workspace_id: str, limit: int = 100) -> list[ChatSessionSummary]:
+        with self.database.session() as session:
+            rows = session.execute(
+                select(ChatSessionRow, func.count(ChatMessageRow.id)).outerjoin(
+                    ChatMessageRow, ChatMessageRow.session_id == ChatSessionRow.id,
+                ).where(
+                    ChatSessionRow.user_id == user_id,
+                    ChatSessionRow.workspace_id == workspace_id,
+                ).group_by(ChatSessionRow.id).having(func.count(ChatMessageRow.id) > 0).order_by(
+                    desc(ChatSessionRow.updated_at)
+                ).limit(
+                    max(1, min(limit, 200))
+                )
+            ).all()
+            return [ChatSessionSummary(
+                id=row.id, workspaceId=row.workspace_id, title=row.title,
+                messageCount=message_count, createdAt=row.created_at, updatedAt=row.updated_at,
+            ) for row, message_count in rows]
 
     def get(self, session_id: str, user_id: str, workspace_id: str | None = None) -> ChatSession:
         with self.database.session() as session:

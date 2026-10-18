@@ -83,7 +83,22 @@ FRONTEND_URL=https://app.example.com
 OAUTH_CALLBACK_BASE_URL=https://api.example.com
 CORS_ORIGINS=https://app.example.com
 
+AI_PROVIDER=gemini
+AI_PROVIDER_TIMEOUT_SECONDS=120
+AI_CHAT_MAX_INPUT_TOKENS=30000
+AI_GENERATION_MAX_INPUT_TOKENS=60000
+AI_CHAT_MAX_FILES=300
+AI_CHAT_MAX_RELATIONSHIPS=500
+AI_CHAT_MAX_QUERY_CHARACTERS=4000
+AI_CHAT_MAX_DOCUMENTATION_CHARACTERS=6000
+AI_CHAT_MAX_PACKAGE_CHARACTERS=4000
+AI_CHAT_MAX_HISTORY_MESSAGES=6
+AI_CHAT_MAX_HISTORY_CHARACTERS=8000
+AI_CHAT_MAX_MESSAGE_CHARACTERS=3000
+
 GEMINI_API_KEY=...
+GEMINI_MODEL=gemini-3.1-flash-lite
+GEMINI_FALLBACK_MODELS=
 GEMINI_CHAT_THINKING_LEVEL=minimal
 GEMINI_GENERATION_THINKING_LEVEL=low
 DATABASE_URL=postgresql://...neon.../testforge?sslmode=require
@@ -106,6 +121,58 @@ POSTHOG_HOST=https://us.i.posthog.com
 PREVIEW_TRUSTED_LOCAL_EXECUTION=false
 ```
 
+The Gemini values above are the recommended free-tier configuration. Chat
+context is relevance-ranked and bounded, then checked with Gemini's tokenizer
+before generation. A Gemini `429 RESOURCE_EXHAUSTED` is not retried or sent to
+fallback models: the API returns a typed retryable error and honors the
+provider's `RetryInfo` delay. After moving to a paid plan, increase the input
+ceilings only after checking that plan's tokens-per-minute quota.
+
+### Selecting OpenAI or Qwen
+
+Use one provider for both capabilities by setting `AI_PROVIDER`, or split them
+with `AI_CHAT_PROVIDER` and `AI_GENERATION_PROVIDER`. Blank capability overrides
+must be removed rather than left empty.
+
+OpenAI configuration:
+
+```dotenv
+AI_PROVIDER=openai
+OPENAI_API_KEY=...
+OPENAI_MODEL=gpt-5.6-luna
+OPENAI_CHAT_REASONING_EFFORT=low
+OPENAI_GENERATION_REASONING_EFFORT=low
+```
+
+Qwen 3.7 Flash purchased through OpenRouter must use OpenRouter's key, endpoint,
+and author/model slug. Do not send an `sk-or-...` key to a DashScope URL:
+
+```dotenv
+AI_PROVIDER=openrouter
+OPENROUTER_API_KEY=...
+OPENROUTER_MODEL=qwen/qwen3.7-flash
+OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
+OPENROUTER_SITE_URL=https://app.example.com
+OPENROUTER_APP_NAME=TestForge
+```
+
+Direct Alibaba Model Studio Qwen configuration:
+
+```dotenv
+AI_PROVIDER=qwen
+QWEN_API_KEY=...
+QWEN_MODEL=qwen3.7-flash
+QWEN_BASE_URL=https://YOUR_WORKSPACE_ID.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1
+QWEN_CHAT_ENABLE_THINKING=false
+QWEN_GENERATION_ENABLE_THINKING=false
+```
+
+`QWEN_BASE_URL` and the API key must belong to the same Alibaba Model Studio
+region. The example is Singapore; use the workspace endpoint shown in Model
+Studio for Virginia, Frankfurt, Tokyo, Beijing, or Hong Kong. The shared
+Singapore compatibility URL remains the local default for existing keys, but a
+workspace-specific URL is recommended for production.
+
 Support tickets email every active user whose role is `ADMIN` on
 submission and email the requester when an admin marks a ticket In Progress or
 Completed. Configure SMTP for this; without `SMTP_HOST` and `SMTP_FROM`, tickets
@@ -122,6 +189,24 @@ API_PUBLIC_URL=https://api.example.com
 
 Apply `backend/migrations/007_support_tickets.sql` before deploying this
 release.
+
+For AI result history, also apply `backend/migrations/008_ai_history.sql` before
+deploying. Generated tests are stored per user and workspace; existing chat
+messages continue to use the `chat_sessions` and `chat_messages` tables.
+
+AI responses use an exact-prompt, user/workspace-scoped ephemeral cache. The
+prompt hash includes indexed repository context, provider, and model, so a
+changed index or model does not reuse stale output.
+
+```dotenv
+AI_RESPONSE_CACHE_ENABLED=true
+AI_RESPONSE_CACHE_TTL_SECONDS=21600
+AI_RESPONSE_CACHE_MEMORY_ENTRIES=200
+```
+
+Redis is the shared cache across Railway instances. If Redis is briefly
+unavailable, requests fail open to a bounded per-process cache rather than
+blocking AI generation.
 
 Keep the rate-limit and concurrency variables from `.env.example`; the defaults
 are deliberately conservative. `PORT` is supplied by Railway and honored by

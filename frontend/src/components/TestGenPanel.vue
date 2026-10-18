@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import type { AIQueryResponse } from '../types/api'
+import { computed } from 'vue'
+import type { AIQueryResponse, DatedHistoryGroup, TestGenerationSummary } from '../types/api'
 import MarkdownRenderer from './MarkdownRenderer.vue'
 
-defineProps<{
+const props = defineProps<{
   mode: 'scenario' | 'file'
   scenario: string
   selectedFile: string
@@ -10,8 +11,11 @@ defineProps<{
   fileMenuOpen: boolean
   fileOptions: string[]
   filteredFiles: string[]
-  busy: boolean
+  scenarioBusy: boolean
+  fileBusy: boolean
   result: AIQueryResponse | null
+  historyGroups: DatedHistoryGroup<TestGenerationSummary>[]
+  historyBusy: boolean
   suggested: string[]
   error: string | null
 }>()
@@ -24,7 +28,18 @@ const emit = defineEmits<{
   (e: 'update:fileMenuOpen', value: boolean): void
   (e: 'generate:scenario', value?: string): void
   (e: 'generate:file', value?: string): void
+  (e: 'select-history', value: TestGenerationSummary): void
 }>()
+
+const busy = computed(() => props.mode === 'scenario' ? props.scenarioBusy : props.fileBusy)
+
+function historyTitle(item: TestGenerationSummary) {
+  return item.mode === 'scenario' ? item.scenario : item.target
+}
+
+function historyTime(value: string) {
+  return new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit' }).format(new Date(value))
+}
 </script>
 
 <template>
@@ -130,6 +145,24 @@ const emit = defineEmits<{
         RepoPilot reads the selected file, infers its public API and edge cases, and produces a battery of scenario tests.
       </p>
     </div>
+
+    <details v-if="historyBusy || historyGroups.length" class="history-panel">
+      <summary>Saved generations</summary>
+      <div v-if="historyBusy && !historyGroups.length" class="history-panel__empty">Loading saved results…</div>
+      <section v-for="group in historyGroups" :key="group.key" class="history-group">
+        <h3>{{ group.label }}</h3>
+        <button
+          v-for="item in group.items"
+          :key="item.id"
+          class="history-item"
+          type="button"
+          @click="emit('select-history', item)"
+        >
+          <span class="history-item__title">{{ historyTitle(item) }}</span>
+          <span class="history-item__meta">{{ item.mode }} · {{ item.testType }} · {{ historyTime(item.createdAt) }}</span>
+        </button>
+      </section>
+    </details>
 
     <div class="results-area results-area--md">
       <div v-if="!result && !busy" class="empty-state-box">

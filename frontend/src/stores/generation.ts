@@ -1,10 +1,16 @@
 import { computed, ref, watch } from 'vue'
 import { defineStore } from 'pinia'
 import { captureTelemetry } from '../services/telemetry'
-import { analyzeImpact, extractAPIError, generateTests, getLatestChatSession, streamChatQuery } from '../services/api'
+import {
+  analyzeImpact, extractAPIError, generateTests, getChatSession, getLatestChatSession, getTestGeneration,
+  listChatSessions, listTestGenerations, streamChatQuery,
+} from '../services/api'
 import { useWorkspaceStore } from './workspace'
 import { useFeatureFlagStore } from './features'
-import type { AIQueryResponse, ChatMessage, ImpactAnalysisResponse } from '../types/api'
+import type {
+  AIQueryResponse, ChatMessage, ChatSessionSummary, DatedHistoryGroup,
+  ImpactAnalysisResponse, TestGenerationRecord, TestGenerationSummary,
+} from '../types/api'
 
 export type TabId = 'ask' | 'tests' | 'preview' | 'insights' | 'impact'
 export type TestMode = 'scenario' | 'file'
@@ -25,11 +31,20 @@ export const useGenerationStore = defineStore('generation', () => {
   const impactBusy = ref(false)
   const impactError = ref<string | null>(null)
   const impactResult = ref<ImpactAnalysisResponse | null>(null)
-  const busy = ref(false)
+  const chatBusy = ref(false)
+  const scenarioBusy = ref(false)
+  const fileBusy = ref(false)
+  const historyBusy = ref(false)
   const error = ref<string | null>(null)
-  const result = ref<AIQueryResponse | null>(null)
+  const scenarioResult = ref<AIQueryResponse | null>(null)
+  const fileResult = ref<AIQueryResponse | null>(null)
+  const result = computed(() => mode.value === 'scenario' ? scenarioResult.value : fileResult.value)
   const chatSessionId = ref<string | null>(null)
   const chatMessages = ref<ChatMessage[]>([])
+  const chatSessions = ref<ChatSessionSummary[]>([])
+  const testGenerations = ref<TestGenerationSummary[]>([])
+  const chatHistoryGroups = computed(() => groupByAge(chatSessions.value, (item) => item.updatedAt))
+  const generationHistoryGroups = computed(() => groupByAge(testGenerations.value, (item) => item.createdAt))
 
   const tabs = computed(() => [
     { id: 'ask' as TabId, label: 'Ask the codebase' },
@@ -73,9 +88,8 @@ export const useGenerationStore = defineStore('generation', () => {
       return null
     }
 
-    busy.value = true
+    chatBusy.value = true
     error.value = null
-    result.value = null
     genericQuery.value = ''
     const pendingId = `pending-${crypto.randomUUID()}`
     const assistantId = `assistant-${crypto.randomUUID()}`
@@ -122,7 +136,6 @@ export const useGenerationStore = defineStore('generation', () => {
         markdown: streamed.markdown,
         sessionId: chatSessionId.value,
       }
-      result.value = response
       return response
     } catch (caughtError) {
       chatMessages.value = chatMessages.value.filter(
@@ -131,7 +144,8 @@ export const useGenerationStore = defineStore('generation', () => {
       error.value = extractMessage(caughtError, 'Failed to run query.')
       return null
     } finally {
-      busy.value = false
+      chatBusy.value = false
+      void refreshChatSessions(workspaceId).catch(() => undefined)
     }
   }
 
@@ -151,10 +165,78 @@ export const useGenerationStore = defineStore('generation', () => {
     }
   }
 
+  async function refreshChatSessions(workspaceId: string) {
+    const sessions = await listChatSessions(workspaceId)
+    if (workspaceStore.currentWorkspaceId === workspaceId) chatSessions.value = sessions
+  }
+
+  async function refreshTestGenerations(workspaceId: string) {
+    const generations = await listTestGenerations(workspaceId)
+    if (workspaceStore.currentWorkspaceId === workspaceId) testGenerations.value = generations
+  }
+
+  async function loadHistory(workspaceId: string | null) {
+    chatSessions.value = []
+    testGenerations.value = []
+    if (!workspaceId) return
+    historyBusy.value = true
+    try {
+      await Promise.all([refreshChatSessions(workspaceId), refreshTestGenerations(workspaceId)])
+    } catch (caughtError) {
+      if (workspaceStore.currentWorkspaceId === workspaceId) {
+        error.value = extractMessage(caughtError, 'Failed to load saved activity.')
+      }
+    } finally {
+      if (workspaceStore.currentWorkspaceId === workspaceId) historyBusy.value = false
+    }
+  }
+
+  async function openChatSession(sessionId: string) {
+    const workspaceId = workspaceStore.currentWorkspaceId
+    if (!workspaceId || chatBusy.value) return
+    historyBusy.value = true
+    error.value = null
+    try {
+      const session = await getChatSession(workspaceId, sessionId)
+      if (workspaceStore.currentWorkspaceId !== workspaceId) return
+      chatSessionId.value = session.id
+      chatMessages.value = session.messages
+    } catch (caughtError) {
+      error.value = extractMessage(caughtError, 'Failed to open the saved chat.')
+    } finally {
+      historyBusy.value = false
+    }
+  }
+
+  async function openTestGeneration(item: TestGenerationSummary) {
+    const workspaceId = workspaceStore.currentWorkspaceId
+    if (!workspaceId) return
+    historyBusy.value = true
+    error.value = null
+    try {
+      const generation: TestGenerationRecord = await getTestGeneration(workspaceId, item.id)
+      if (workspaceStore.currentWorkspaceId !== workspaceId) return
+      mode.value = generation.mode
+      testType.value = generation.testType === 'e2e' ? 'integration' : generation.testType
+      scenario.value = generation.scenario ?? ''
+      selectedFile.value = generation.target ?? ''
+      const restored: AIQueryResponse = {
+        type: 'test_generation', workspaceId: generation.workspaceId, prompt: '',
+        markdown: generation.markdown, target: generation.target ?? generation.scenario ?? undefined,
+        testType: generation.testType,
+      }
+      if (generation.mode === 'scenario') scenarioResult.value = restored
+      else fileResult.value = restored
+    } catch (caughtError) {
+      error.value = extractMessage(caughtError, 'Failed to open the saved generation.')
+    } finally {
+      historyBusy.value = false
+    }
+  }
+
   function startNewChat() {
     chatSessionId.value = null
     chatMessages.value = []
-    result.value = null
     error.value = null
     genericQuery.value = ''
   }
@@ -171,9 +253,9 @@ export const useGenerationStore = defineStore('generation', () => {
       return null
     }
 
-    busy.value = true
+    scenarioBusy.value = true
     error.value = null
-    result.value = null
+    scenarioResult.value = null
     scenario.value = nextScenario
 
     try {
@@ -183,13 +265,14 @@ export const useGenerationStore = defineStore('generation', () => {
         scenario: nextScenario,
         type: testType.value,
       })
-      result.value = response
+      scenarioResult.value = response
+      void refreshTestGenerations(workspaceId).catch(() => undefined)
       return response
     } catch (caughtError) {
       error.value = extractMessage(caughtError, 'Failed to generate tests.')
       return null
     } finally {
-      busy.value = false
+      scenarioBusy.value = false
     }
   }
 
@@ -209,9 +292,9 @@ export const useGenerationStore = defineStore('generation', () => {
     target.value = matchingTarget?.value ?? nextFile
     selectedFile.value = nextFile
     fileMenuOpen.value = false
-    busy.value = true
+    fileBusy.value = true
     error.value = null
-    result.value = null
+    fileResult.value = null
 
     try {
       const response = await generateTests({
@@ -220,13 +303,14 @@ export const useGenerationStore = defineStore('generation', () => {
         target: target.value,
         type: testType.value,
       })
-      result.value = response
+      fileResult.value = response
+      void refreshTestGenerations(workspaceId).catch(() => undefined)
       return response
     } catch (caughtError) {
       error.value = extractMessage(caughtError, 'Failed to generate tests.')
       return null
     } finally {
-      busy.value = false
+      fileBusy.value = false
     }
   }
 
@@ -304,7 +388,12 @@ export const useGenerationStore = defineStore('generation', () => {
 
   watch(
     () => workspaceStore.currentWorkspaceId,
-    (workspaceId) => { void loadLatestChat(workspaceId) },
+    (workspaceId) => {
+      void loadLatestChat(workspaceId)
+      void loadHistory(workspaceId)
+      scenarioResult.value = null
+      fileResult.value = null
+    },
     { immediate: true },
   )
 
@@ -323,17 +412,26 @@ export const useGenerationStore = defineStore('generation', () => {
     impactBusy,
     impactError,
     impactResult,
-    busy,
+    chatBusy,
+    scenarioBusy,
+    fileBusy,
+    historyBusy,
     error,
     result,
     chatSessionId,
     chatMessages,
+    chatSessions,
+    testGenerations,
+    chatHistoryGroups,
+    generationHistoryGroups,
     suggestedQuestions,
     suggestedScenarios,
     fileOptions,
     filteredFiles,
     runQuery,
     startNewChat,
+    openChatSession,
+    openTestGeneration,
     runGenerationFromScenario,
     runGenerationFromFile,
     runImpactAnalysis,
@@ -352,4 +450,20 @@ export const useGenerationStore = defineStore('generation', () => {
 
 function extractMessage(error: unknown, fallback: string) {
   return extractAPIError(error, fallback).message
+}
+
+function groupByAge<T>(items: T[], dateOf: (item: T) => string): DatedHistoryGroup<T>[] {
+  const now = new Date()
+  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime()
+  const sevenDaysAgo = startOfToday - 6 * 24 * 60 * 60 * 1000
+  const groups: DatedHistoryGroup<T>[] = [
+    { key: 'today', label: 'Today', items: [] },
+    { key: 'last7Days', label: 'Last 7 days', items: [] },
+    { key: 'older', label: 'More than 7 days ago', items: [] },
+  ]
+  for (const item of items) {
+    const timestamp = new Date(dateOf(item)).getTime()
+    groups[timestamp >= startOfToday ? 0 : timestamp >= sevenDaysAgo ? 1 : 2].items.push(item)
+  }
+  return groups.filter((group) => group.items.length)
 }

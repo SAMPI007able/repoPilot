@@ -4,20 +4,30 @@ import unittest
 from unittest.mock import patch
 
 from app.services.ai.gemini_provider import GeminiProvider
-from app.services.ai.provider import AIProviderUnavailableError
+from app.services.ai.provider import (
+    AIProviderPromptTooLargeError,
+    AIProviderQuotaError,
+    AIProviderUnavailableError,
+)
 
 
 class FakeGeminiError(Exception):
-    def __init__(self, code: int) -> None:
-        super().__init__(f"{code} UNAVAILABLE")
+    def __init__(self, code: int, message: str | None = None, details=None) -> None:
+        super().__init__(message or f"{code} UNAVAILABLE")
         self.code = code
+        self.details = details
 
 
 class FakeModels:
-    def __init__(self, outcomes: list[object]) -> None:
+    def __init__(self, outcomes: list[object], token_count: int = 10) -> None:
         self.outcomes = outcomes
+        self.token_count = token_count
         self.calls: list[str] = []
         self.configs: list[dict] = []
+
+    def count_tokens(self, model: str, contents: str) -> object:
+        del model, contents
+        return types.SimpleNamespace(total_tokens=self.token_count)
 
     def generate_content(self, model: str, contents: str, config: dict) -> object:
         del contents
@@ -40,7 +50,9 @@ class FakeModels:
 
 class GeminiProviderTests(unittest.TestCase):
     def _install_fake_sdk(self, models: FakeModels):
-        fake_genai = types.SimpleNamespace(Client=lambda api_key: types.SimpleNamespace(models=models))
+        fake_genai = types.SimpleNamespace(
+            Client=lambda **kwargs: types.SimpleNamespace(models=models)
+        )
         fake_google = types.ModuleType("google")
         fake_google.genai = fake_genai
         return patch.dict(sys.modules, {"google": fake_google, "google.genai": fake_genai})
@@ -123,6 +135,42 @@ class GeminiProviderTests(unittest.TestCase):
 
         with self._install_fake_sdk(models), self.assertRaises(AIProviderUnavailableError):
             provider.generate("prompt")
+
+    def test_quota_error_does_not_consume_fallback_and_exposes_retry_delay(self) -> None:
+        details = {
+            "error": {
+                "details": [{
+                    "@type": "type.googleapis.com/google.rpc.RetryInfo",
+                    "retryDelay": "45.2s",
+                }]
+            }
+        }
+        models = FakeModels([FakeGeminiError(429, "429 RESOURCE_EXHAUSTED", details)])
+        provider = GeminiProvider(
+            api_key="test-key",
+            fallback_models=["gemini-3.1-flash-lite"],
+        )
+
+        with self._install_fake_sdk(models), self.assertRaises(AIProviderQuotaError) as raised:
+            provider.generate("prompt")
+
+        self.assertEqual(raised.exception.retry_after_seconds, 46)
+        self.assertEqual(models.calls, ["gemini-3.5-flash"])
+
+        with self.assertRaises(AIProviderQuotaError):
+            provider.generate("prompt")
+        self.assertEqual(models.calls, ["gemini-3.5-flash"])
+
+    def test_rejects_oversized_prompt_before_generation(self) -> None:
+        models = FakeModels([], token_count=101)
+        provider = GeminiProvider(
+            api_key="test-key", fallback_models=[], max_input_tokens=100
+        )
+
+        with self._install_fake_sdk(models), self.assertRaises(AIProviderPromptTooLargeError):
+            provider.generate("large prompt")
+
+        self.assertEqual(models.calls, [])
 
 
 if __name__ == "__main__":

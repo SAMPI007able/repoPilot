@@ -54,7 +54,9 @@ from app.models.integration_models import (
 )
 from app.persistence.identity_persistence_service import IdentityPersistenceService
 from app.persistence.chat_persistence_service import ChatPersistenceService, ChatSessionNotFoundError
-from app.models.chat_models import ChatSession
+from app.persistence.test_generation_persistence_service import TestGenerationPersistenceService
+from app.models.chat_models import ChatSession, ChatSessionSummary
+from app.models.generation_models import TestGenerationRecord, TestGenerationSummary
 from app.services.auth_dependencies import AuthenticationDependencies
 from app.services.authentication import AuthenticationError, create_token_verifier
 from app.persistence.preview_persistence_service import (
@@ -66,9 +68,14 @@ from app.persistence.preview_persistence_service import (
 from app.services.ai.ai_service import AIService
 from app.services.ai.chat_capability import ChatCapability
 from app.services.ai.documentation_capability import DocumentationCapability
-from app.services.ai.gemini_provider import GeminiProvider
-from app.services.ai.provider import AIProviderUnavailableError
+from app.services.ai.provider_factory import create_ai_provider
+from app.services.ai.provider import (
+    AIProviderPromptTooLargeError,
+    AIProviderQuotaError,
+    AIProviderUnavailableError,
+)
 from app.services.ai.test_generation_capability import TestGenerationCapability
+from app.services.ai_response_cache_service import AIResponseCacheService
 from app.services.chat_prompt_builder_service import ChatPromptBuilderService
 from app.services.context_builder_service import ContextBuilderService
 from app.services.documentation_prompt_builder_service import DocumentationPromptBuilderService
@@ -246,12 +253,8 @@ prompt_builder_service = PromptBuilderService()
 impact_analysis_service = ImpactAnalysisService()
 chat_prompt_builder_service = ChatPromptBuilderService()
 documentation_prompt_builder_service = DocumentationPromptBuilderService()
-chat_ai_provider = GeminiProvider(
-    thinking_level=os.getenv("GEMINI_CHAT_THINKING_LEVEL", "minimal")
-)
-generation_ai_provider = GeminiProvider(
-    thinking_level=os.getenv("GEMINI_GENERATION_THINKING_LEVEL", "low")
-)
+chat_ai_provider = create_ai_provider("chat")
+generation_ai_provider = create_ai_provider("generation")
 chat_capability = ChatCapability(chat_ai_provider, chat_prompt_builder_service)
 test_generation_capability = TestGenerationCapability(
     generation_ai_provider, context_builder_service, prompt_builder_service
@@ -273,6 +276,8 @@ feature_flag_service = FeatureFlagPersistenceService(database)
 feature_flag_service.ensure_defaults()
 identity_persistence_service = IdentityPersistenceService(database)
 chat_persistence_service = ChatPersistenceService(database)
+test_generation_persistence_service = TestGenerationPersistenceService(database)
+ai_response_cache_service = AIResponseCacheService()
 admin_service = AdminService(database)
 oauth_persistence_service = OAuthPersistenceService(database)
 oauth_integration_service = OAuthIntegrationService(oauth_persistence_service)
@@ -448,6 +453,29 @@ def _apply_rate_headers(response: Response, decision: RateLimitDecision) -> None
 def _preview_reservation_id(workspace_id: str, idempotency_key: str) -> str:
     value = f"{workspace_id}:{idempotency_key}".encode("utf-8")
     return f"reservation:{hashlib.sha256(value).hexdigest()[:32]}"
+
+
+def _provider_identity(provider) -> str:
+    return ":".join(filter(None, [
+        provider.__class__.__name__,
+        str(getattr(provider, "model", "")),
+        str(getattr(provider, "base_url", "")),
+    ]))
+
+
+def _generation_request_hash(
+    principal: Principal, payload: QueryRequest, test_type: str, prompt: str,
+) -> str:
+    return hashlib.sha256(json.dumps({
+        "user": principal.user_id,
+        "workspace": payload.workspaceId,
+        "mode": payload.generationMode,
+        "testType": test_type,
+        "target": payload.target,
+        "scenario": payload.scenario.strip() if payload.scenario else None,
+        "provider": _provider_identity(generation_ai_provider),
+        "prompt": prompt,
+    }, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
 
 
 # ── Routes ───────────────────────────────────────────────────────────────────
@@ -1037,6 +1065,57 @@ def latest_chat_session(
     return session
 
 
+@app.get("/workspaces/{workspace_id}/chat-sessions", response_model=list[ChatSessionSummary])
+def list_chat_sessions(
+    workspace_id: str,
+    limit: int = 100,
+    principal: Principal = Depends(auth.active_principal),
+):
+    _authorize_workspace(workspace_id, principal)
+    return chat_persistence_service.list_sessions(principal.user_id, workspace_id, limit)
+
+
+@app.get("/workspaces/{workspace_id}/chat-sessions/{session_id}", response_model=ChatSession)
+def get_chat_session(
+    workspace_id: str,
+    session_id: str,
+    principal: Principal = Depends(auth.active_principal),
+):
+    _authorize_workspace(workspace_id, principal)
+    try:
+        return chat_persistence_service.get(session_id, principal.user_id, workspace_id)
+    except ChatSessionNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Chat session not found in this workspace.") from exc
+
+
+@app.get("/workspaces/{workspace_id}/test-generations", response_model=list[TestGenerationSummary])
+def list_test_generations(
+    workspace_id: str,
+    limit: int = 100,
+    principal: Principal = Depends(auth.active_principal),
+):
+    _authorize_workspace(workspace_id, principal)
+    return test_generation_persistence_service.list_generations(principal.user_id, workspace_id, limit)
+
+
+@app.get(
+    "/workspaces/{workspace_id}/test-generations/{generation_id}",
+    response_model=TestGenerationRecord,
+)
+def get_test_generation(
+    workspace_id: str,
+    generation_id: str,
+    principal: Principal = Depends(auth.active_principal),
+):
+    _authorize_workspace(workspace_id, principal)
+    generation = test_generation_persistence_service.get_generation(
+        generation_id, principal.user_id, workspace_id,
+    )
+    if generation is None:
+        raise HTTPException(status_code=404, detail="Saved test generation was not found.")
+    return generation
+
+
 @app.post("/ai/query/stream")
 def stream_ai_query(
     payload: QueryRequest,
@@ -1050,8 +1129,6 @@ def stream_ai_query(
 
     _require_feature("ai_generation")
     _, repository_metadata = _load_workspace(payload.workspaceId, principal)
-    rate_decision = rate_limit_guard.enforce(principal, "project_chat")
-
     if payload.sessionId:
         chat_session = chat_persistence_service.get(
             payload.sessionId, principal.user_id, payload.workspaceId,
@@ -1061,7 +1138,17 @@ def stream_ai_query(
     history = chat_persistence_service.context(
         chat_session.id, principal.user_id, payload.workspaceId,
     )
-    _, chunks = ai_service.stream_chat(repository_metadata, payload.query, history)
+    prompt = chat_capability.prepare(repository_metadata, payload.query, history)
+    cache_key = ai_response_cache_service.key(
+        principal.user_id, payload.workspaceId, "chat", _provider_identity(chat_ai_provider), prompt,
+    )
+    cached_markdown = ai_response_cache_service.get(cache_key)
+    if cached_markdown is None:
+        rate_decision = rate_limit_guard.enforce(principal, "project_chat")
+        chunks = chat_capability.stream_prepared(prompt)
+    else:
+        rate_decision = None
+        chunks = iter([cached_markdown])
 
     def event(payload: dict) -> str:
         return json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n"
@@ -1077,6 +1164,8 @@ def stream_ai_query(
             markdown = "".join(answer_parts)
             if not markdown:
                 raise RuntimeError("The AI provider returned an empty response.")
+            if cached_markdown is None:
+                ai_response_cache_service.set(cache_key, markdown)
             chat_persistence_service.append_exchange(
                 chat_session.id,
                 principal.user_id,
@@ -1084,13 +1173,33 @@ def stream_ai_query(
                 payload.query,
                 markdown,
             )
-            admin_service.record_usage(principal.user_id, "ai_request")
+            if cached_markdown is None:
+                admin_service.record_usage(principal.user_id, "ai_request")
             telemetry.capture(principal.user_id, "chat_message", {
                 "workspace_id": payload.workspaceId,
                 "query_length": len(payload.query),
                 "streamed": True,
             })
             yield event({"type": "done", "sessionId": chat_session.id})
+        except AIProviderQuotaError as exc:
+            try:
+                admin_service.record_log(
+                    "runtime", str(exc), code="AI_QUOTA_EXHAUSTED", user_id=principal.user_id,
+                )
+            except Exception:
+                pass
+            yield event({
+                "type": "error",
+                "code": "AI_QUOTA_EXHAUSTED",
+                "message": str(exc),
+                "retryAfterSeconds": exc.retry_after_seconds,
+            })
+        except AIProviderPromptTooLargeError as exc:
+            yield event({
+                "type": "error",
+                "code": "AI_PROMPT_TOO_LARGE",
+                "message": str(exc),
+            })
         except AIProviderUnavailableError as exc:
             try:
                 admin_service.record_log(
@@ -1098,7 +1207,11 @@ def stream_ai_query(
                 )
             except Exception:
                 pass
-            yield event({"type": "error", "message": str(exc)})
+            yield event({
+                "type": "error",
+                "code": "AI_PROVIDER_UNAVAILABLE",
+                "message": str(exc),
+            })
         except Exception:
             try:
                 admin_service.record_log(
@@ -1115,9 +1228,10 @@ def stream_ai_query(
             })
 
     headers = {
-        **rate_decision.headers,
+        **(rate_decision.headers if rate_decision else {}),
         "Cache-Control": "no-cache, no-transform",
         "X-Accel-Buffering": "no",
+        "X-AI-Cache": "HIT" if cached_markdown is not None else "MISS",
     }
     return StreamingResponse(
         stream_events(),
@@ -1143,7 +1257,6 @@ def ai_query(payload: QueryRequest, response: Response, principal: Principal = D
             if not payload.query:
                 raise HTTPException(status_code=400, detail="query is required for type=chat")
 
-            _apply_rate_headers(response, rate_limit_guard.enforce(principal, "project_chat"))
             if payload.sessionId:
                 chat_session = chat_persistence_service.get(
                     payload.sessionId, principal.user_id, payload.workspaceId,
@@ -1153,11 +1266,23 @@ def ai_query(payload: QueryRequest, response: Response, principal: Principal = D
             history = chat_persistence_service.context(
                 chat_session.id, principal.user_id, payload.workspaceId,
             )
-            prompt, markdown = ai_service.chat(repository_metadata, payload.query, history)
+            prompt = chat_capability.prepare(repository_metadata, payload.query, history)
+            cache_key = ai_response_cache_service.key(
+                principal.user_id, payload.workspaceId, "chat",
+                _provider_identity(chat_ai_provider), prompt,
+            )
+            markdown = ai_response_cache_service.get(cache_key)
+            cache_hit = markdown is not None
+            if markdown is None:
+                _apply_rate_headers(response, rate_limit_guard.enforce(principal, "project_chat"))
+                markdown = chat_capability.generate_prepared(prompt)
+                ai_response_cache_service.set(cache_key, markdown)
+            response.headers["X-AI-Cache"] = "HIT" if cache_hit else "MISS"
             chat_persistence_service.append_exchange(
                 chat_session.id, principal.user_id, payload.workspaceId, payload.query, markdown,
             )
-            admin_service.record_usage(principal.user_id, "ai_request")
+            if not cache_hit:
+                admin_service.record_usage(principal.user_id, "ai_request")
             telemetry.capture(principal.user_id, "chat_message", {
                 "workspace_id": payload.workspaceId,
                 "query_length": len(payload.query or ""),
@@ -1184,26 +1309,59 @@ def ai_query(payload: QueryRequest, response: Response, principal: Principal = D
                         status_code=400,
                         detail="target is required for file test generation",
                     )
-            _apply_rate_headers(response, rate_limit_guard.enforce(principal, "ai_generation"))
+            if payload.generationMode == "scenario":
+                prompt = test_generation_capability.prepare_scenario(
+                    repository_metadata, payload.scenario.strip(), test_type,
+                )
+            else:
+                prompt = test_generation_capability.prepare(
+                    repository_metadata, payload.target, test_type,
+                )
+            request_hash = _generation_request_hash(principal, payload, test_type, prompt)
+            cached_generation = test_generation_persistence_service.find_cached(
+                principal.user_id, payload.workspaceId, request_hash,
+            )
+            if cached_generation is not None:
+                response.headers["X-AI-Cache"] = "HIT"
+                return QueryResponse(
+                    type="test_generation", workspaceId=payload.workspaceId,
+                    prompt=cached_generation.prompt, markdown=cached_generation.markdown,
+                    target=cached_generation.target or cached_generation.scenario,
+                    testType=cached_generation.test_type,
+                )
+
+            cache_key = ai_response_cache_service.key(
+                principal.user_id, payload.workspaceId, "test_generation",
+                _provider_identity(generation_ai_provider), prompt,
+            )
+            markdown = ai_response_cache_service.get(cache_key)
+            cache_hit = markdown is not None
+            if markdown is None:
+                _apply_rate_headers(response, rate_limit_guard.enforce(principal, "ai_generation"))
+                markdown = test_generation_capability.generate_prepared(prompt)
+                ai_response_cache_service.set(cache_key, markdown)
+            response.headers["X-AI-Cache"] = "HIT" if cache_hit else "MISS"
+
             if payload.generationMode == "scenario":
                 telemetry.capture(principal.user_id, "scenario_generation", {
                     "workspace_id": payload.workspaceId,
                     "test_type": test_type,
                 })
-                prompt, markdown = ai_service.generate_tests_from_scenario(
-                    repository_metadata, payload.scenario.strip(), test_type,
-                )
             else:
-                prompt, markdown = ai_service.generate_tests(
-                    repository_metadata, payload.target, test_type,
-                )
                 telemetry.capture(principal.user_id, "test_generation", {
                     "workspace_id": payload.workspaceId,
                     "target": payload.target or "",
                     "test_type": test_type,
                 })
 
-            admin_service.record_usage(principal.user_id, "ai_request")
+            if not cache_hit:
+                admin_service.record_usage(principal.user_id, "ai_request")
+            test_generation_persistence_service.create(
+                user_id=principal.user_id, workspace_id=payload.workspaceId,
+                mode=payload.generationMode, test_type=test_type,
+                target=payload.target, scenario=payload.scenario.strip() if payload.scenario else None,
+                prompt=prompt, markdown=markdown, request_hash=request_hash, cache_hit=cache_hit,
+            )
 
             return QueryResponse(
                 type="test_generation",
@@ -1221,6 +1379,14 @@ def ai_query(payload: QueryRequest, response: Response, principal: Principal = D
         raise HTTPException(status_code=404, detail="Chat session not found in this workspace.") from exc
     except (HTTPException, QuotaAPIError):
         raise
+    except AIProviderQuotaError as exc:
+        raise HTTPException(
+            status_code=429,
+            detail=str(exc),
+            headers={"Retry-After": str(exc.retry_after_seconds)},
+        ) from exc
+    except AIProviderPromptTooLargeError as exc:
+        raise HTTPException(status_code=413, detail=str(exc)) from exc
     except AIProviderUnavailableError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except ValueError as exc:
@@ -1248,6 +1414,14 @@ def generate_tests(payload: GenerateTestsRequest, response: Response, principal:
         )
     except (HTTPException, QuotaAPIError):
         raise
+    except AIProviderQuotaError as exc:
+        raise HTTPException(
+            status_code=429,
+            detail=str(exc),
+            headers={"Retry-After": str(exc.retry_after_seconds)},
+        ) from exc
+    except AIProviderPromptTooLargeError as exc:
+        raise HTTPException(status_code=413, detail=str(exc)) from exc
     except AIProviderUnavailableError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except ValueError as exc:

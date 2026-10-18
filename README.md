@@ -48,6 +48,10 @@ Key endpoints:
 - `GET /workspaces/{workspace_id}` — restore a persisted repository index
 - `DELETE /workspaces/{workspace_id}` — remove workspace metadata and artifacts
 - `POST /ai/query` — chat or test generation
+- `GET /workspaces/{id}/chat-sessions` — list resumable chat history
+- `GET /workspaces/{id}/chat-sessions/{sessionId}` — restore one chat
+- `GET /workspaces/{id}/test-generations` — list saved generated tests
+- `GET /workspaces/{id}/test-generations/{generationId}` — restore one generated result
 - `POST /workspaces/impact-analysis` — analyze a target's impact
 
 Authentication

@@ -220,13 +220,17 @@ const insightItems = [] as Array<{ title: string; path: string; severity: string
       v-if="generationStore.tab === 'ask'"
       :workspace-name="workspace.repoName"
       :input="generationStore.genericQuery"
-      :busy="generationStore.busy"
+      :busy="generationStore.chatBusy"
       :messages="generationStore.chatMessages"
+      :history-groups="generationStore.chatHistoryGroups"
+      :history-busy="generationStore.historyBusy"
+      :active-session-id="generationStore.chatSessionId"
       :suggested="generationStore.suggestedQuestions"
       :error="generationStore.error"
       @update:input="generationStore.setGenericQuery"
       @submit="generationStore.runQuery"
       @new-chat="generationStore.startNewChat"
+      @select-session="generationStore.openChatSession"
     />
 
     <TestGenPanel
@@ -238,8 +242,11 @@ const insightItems = [] as Array<{ title: string; path: string; severity: string
       :file-menu-open="generationStore.fileMenuOpen"
       :file-options="generationStore.fileOptions"
       :filtered-files="generationStore.filteredFiles"
-      :busy="generationStore.busy"
+      :scenario-busy="generationStore.scenarioBusy"
+      :file-busy="generationStore.fileBusy"
       :result="generationStore.result"
+      :history-groups="generationStore.generationHistoryGroups"
+      :history-busy="generationStore.historyBusy"
       :suggested="generationStore.suggestedScenarios"
       :error="generationStore.error"
       @update:mode="generationStore.setMode"
@@ -249,6 +256,7 @@ const insightItems = [] as Array<{ title: string; path: string; severity: string
       @update:file-menu-open="generationStore.setFileMenuOpen"
       @generate:scenario="generationStore.runGenerationFromScenario"
       @generate:file="generationStore.runGenerationFromFile"
+      @select-history="generationStore.openTestGeneration"
     />
 
     <RealtimePreviewLab

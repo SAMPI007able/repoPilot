@@ -18,6 +18,9 @@ import type {
   SourceControlProvider,
   FeatureFlagsResponse,
   ChatSession,
+  ChatSessionSummary,
+  TestGenerationRecord,
+  TestGenerationSummary,
   AdminBrowserSession,
   AdminDashboard,
   AdminFeatureFlag,
@@ -276,6 +279,24 @@ interface ChatStreamEvent {
   sessionId?: string
   text?: string
   message?: string
+  code?: string
+  retryAfterSeconds?: number
+}
+
+export class ChatStreamError extends Error {
+  readonly code?: string
+  readonly retryAfterSeconds?: number
+
+  constructor(
+    message: string,
+    code?: string,
+    retryAfterSeconds?: number,
+  ) {
+    super(message)
+    this.name = 'ChatStreamError'
+    this.code = code
+    this.retryAfterSeconds = retryAfterSeconds
+  }
 }
 
 export async function streamChatQuery(
@@ -325,7 +346,11 @@ export async function streamChatQuery(
       markdown += event.text
       onDelta(event.text)
     } else if (event.type === 'error') {
-      throw new Error(event.message || 'The AI response was interrupted.')
+      throw new ChatStreamError(
+        event.message || 'The AI response was interrupted.',
+        event.code,
+        event.retryAfterSeconds,
+      )
     } else if (event.type === 'done') {
       completed = true
     }
@@ -355,6 +380,22 @@ export async function getLatestChatSession(workspaceId: string): Promise<ChatSes
     if (extractAPIError(error, '').status === 404) return null
     throw error
   }
+}
+
+export async function listChatSessions(workspaceId: string): Promise<ChatSessionSummary[]> {
+  return (await api.get<ChatSessionSummary[]>(`/workspaces/${workspaceId}/chat-sessions`)).data
+}
+
+export async function getChatSession(workspaceId: string, sessionId: string): Promise<ChatSession> {
+  return (await api.get<ChatSession>(`/workspaces/${workspaceId}/chat-sessions/${sessionId}`)).data
+}
+
+export async function listTestGenerations(workspaceId: string): Promise<TestGenerationSummary[]> {
+  return (await api.get<TestGenerationSummary[]>(`/workspaces/${workspaceId}/test-generations`)).data
+}
+
+export async function getTestGeneration(workspaceId: string, generationId: string): Promise<TestGenerationRecord> {
+  return (await api.get<TestGenerationRecord>(`/workspaces/${workspaceId}/test-generations/${generationId}`)).data
 }
 
 export async function generateTests(payload: GenerateTestsRequest): Promise<AIQueryResponse> {

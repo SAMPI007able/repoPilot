@@ -305,6 +305,36 @@ export interface ChatSession {
   updatedAt: string
 }
 
+export interface ChatSessionSummary {
+  id: string
+  workspaceId: string
+  title: string | null
+  messageCount: number
+  createdAt: string
+  updatedAt: string
+}
+
+export interface TestGenerationSummary {
+  id: string
+  workspaceId: string
+  mode: 'scenario' | 'file'
+  testType: 'unit' | 'integration' | 'e2e'
+  target: string | null
+  scenario: string | null
+  cacheHit: boolean
+  createdAt: string
+}
+
+export interface TestGenerationRecord extends TestGenerationSummary {
+  markdown: string
+}
+
+export interface DatedHistoryGroup<T> {
+  key: 'today' | 'last7Days' | 'older'
+  label: string
+  items: T[]
+}
+
 export interface GenerateTestsRequest {
   workspaceId: string
   mode: 'file' | 'scenario'

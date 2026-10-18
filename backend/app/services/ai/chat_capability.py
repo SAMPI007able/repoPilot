@@ -20,10 +20,8 @@ class ChatCapability(AICapability):
         query: str,
         history: list[tuple[str, str]] | None = None,
     ) -> tuple[str, str]:
-        prompt = self.prompt_builder.build_prompt(
-            query=query, repository_metadata=repository_metadata, history=history,
-        )
-        return prompt, self.provider.generate(prompt)
+        prompt = self.prepare(repository_metadata, query, history)
+        return prompt, self.generate_prepared(prompt)
 
     def stream(
         self,
@@ -31,7 +29,21 @@ class ChatCapability(AICapability):
         query: str,
         history: list[tuple[str, str]] | None = None,
     ) -> tuple[str, Iterator[str]]:
-        prompt = self.prompt_builder.build_prompt(
+        prompt = self.prepare(repository_metadata, query, history)
+        return prompt, self.stream_prepared(prompt)
+
+    def prepare(
+        self,
+        repository_metadata: RepositoryMetadata,
+        query: str,
+        history: list[tuple[str, str]] | None = None,
+    ) -> str:
+        return self.prompt_builder.build_prompt(
             query=query, repository_metadata=repository_metadata, history=history,
         )
-        return prompt, self.provider.stream(prompt)
+
+    def generate_prepared(self, prompt: str) -> str:
+        return self.provider.generate(prompt)
+
+    def stream_prepared(self, prompt: str) -> Iterator[str]:
+        return self.provider.stream(prompt)

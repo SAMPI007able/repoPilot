@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { MessageSquareText, Plus, SendHorizontal, Sparkles } from '@lucide/vue'
 import { nextTick, ref, watch } from 'vue'
-import type { ChatMessage } from '../types/api'
+import type { ChatMessage, ChatSessionSummary, DatedHistoryGroup } from '../types/api'
 import MarkdownRenderer from './MarkdownRenderer.vue'
 
 const props = defineProps<{
@@ -9,6 +9,9 @@ const props = defineProps<{
   input: string
   busy: boolean
   messages: ChatMessage[]
+  historyGroups: DatedHistoryGroup<ChatSessionSummary>[]
+  historyBusy: boolean
+  activeSessionId: string | null
   suggested: string[]
   error: string | null
 }>()
@@ -17,9 +20,14 @@ const emit = defineEmits<{
   (e: 'update:input', value: string): void
   (e: 'submit', value?: string): void
   (e: 'new-chat'): void
+  (e: 'select-session', value: string): void
 }>()
 
 const messageList = ref<HTMLElement | null>(null)
+
+function historyTime(value: string) {
+  return new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit' }).format(new Date(value))
+}
 
 watch(
   () => [
@@ -49,6 +57,26 @@ watch(
         </button>
       </div>
     </div>
+
+    <details v-if="historyBusy || historyGroups.length" class="history-panel ask-panel__history">
+      <summary>Previous chats</summary>
+      <div v-if="historyBusy && !historyGroups.length" class="history-panel__empty">Loading conversations…</div>
+      <section v-for="group in historyGroups" :key="group.key" class="history-group">
+        <h3>{{ group.label }}</h3>
+        <button
+          v-for="session in group.items"
+          :key="session.id"
+          class="history-item"
+          :class="{ 'history-item--active': session.id === activeSessionId }"
+          type="button"
+          :disabled="busy"
+          @click="emit('select-session', session.id)"
+        >
+          <span class="history-item__title">{{ session.title || 'Untitled chat' }}</span>
+          <span class="history-item__meta">{{ session.messageCount }} messages · {{ historyTime(session.updatedAt) }}</span>
+        </button>
+      </section>
+    </details>
 
     <div ref="messageList" class="ask-panel__messages" aria-live="polite">
       <div v-if="!messages.length && !busy" class="ask-panel__empty">

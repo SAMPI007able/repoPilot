@@ -3,6 +3,7 @@ uvicorn
 pydantic
 gitpython
 google-genai
+openai>=2.0,<3.0
 python-multipart
 SQLAlchemy>=2.0,<3.0
 psycopg[binary]>=3.2,<4.0

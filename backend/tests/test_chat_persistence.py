@@ -41,6 +41,18 @@ class ChatPersistenceTests(unittest.TestCase):
         with self.assertRaises(ChatSessionNotFoundError):
             self.service.get(chat.id, "other-user", "workspace")
 
+    def test_sessions_are_listed_by_recent_activity_with_message_counts(self):
+        older = self.service.create("user", "workspace")
+        newer = self.service.create("user", "workspace")
+        self.service.append_exchange(older.id, "user", "workspace", "First question", "First answer")
+        self.service.append_exchange(newer.id, "user", "workspace", "Second question", "Second answer")
+
+        sessions = self.service.list_sessions("user", "workspace")
+
+        self.assertEqual([item.id for item in sessions], [newer.id, older.id])
+        self.assertEqual(sessions[0].title, "Second question")
+        self.assertEqual(sessions[0].message_count, 2)
+
 
 if __name__ == "__main__":
     unittest.main()

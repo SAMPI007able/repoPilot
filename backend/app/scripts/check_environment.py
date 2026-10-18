@@ -10,7 +10,6 @@ BACKEND_REQUIRED = (
     "APP_ENV",
     "FRONTEND_URL",
     "CORS_ORIGINS",
-    "GEMINI_API_KEY",
     "DATABASE_URL",
     "REDIS_URL",
     "AUTH_MODE",
@@ -42,6 +41,36 @@ def validate(target: str) -> tuple[list[str], list[str]]:
     errors.extend(f"{name} is missing" for name in required if not present(name))
 
     if target in {"backend", "all"}:
+        default_ai_provider = os.getenv("AI_PROVIDER", "gemini").strip().lower() or "gemini"
+        configured_providers = {
+            os.getenv("AI_CHAT_PROVIDER", "").strip().lower() or default_ai_provider,
+            os.getenv("AI_GENERATION_PROVIDER", "").strip().lower() or default_ai_provider,
+        }
+        supported_providers = {"gemini", "openai", "openrouter", "qwen"}
+        for provider in configured_providers:
+            if provider not in supported_providers:
+                errors.append(f"Unsupported AI provider: {provider}")
+            elif provider == "gemini" and not present("GEMINI_API_KEY"):
+                errors.append("GEMINI_API_KEY is missing")
+            elif provider == "openai" and not present("OPENAI_API_KEY"):
+                errors.append("OPENAI_API_KEY is missing")
+            elif provider == "openrouter" and not present("OPENROUTER_API_KEY"):
+                errors.append("OPENROUTER_API_KEY is missing")
+            elif provider == "qwen" and not (
+                present("QWEN_API_KEY") or present("DASHSCOPE_API_KEY")
+            ):
+                errors.append("QWEN_API_KEY or DASHSCOPE_API_KEY is missing")
+        if "qwen" in configured_providers and not present("QWEN_BASE_URL"):
+            warnings.append(
+                "QWEN_BASE_URL is absent; the legacy Singapore endpoint will be used"
+            )
+        elif "qwen" in configured_providers and not os.environ["QWEN_BASE_URL"].startswith(
+            "https://"
+        ):
+            errors.append("QWEN_BASE_URL must use HTTPS")
+        if "openrouter" in configured_providers and present("OPENROUTER_BASE_URL"):
+            if not os.environ["OPENROUTER_BASE_URL"].startswith("https://"):
+                errors.append("OPENROUTER_BASE_URL must use HTTPS")
         if os.getenv("APP_ENV", "").lower() not in {"production", "staging"}:
             warnings.append("APP_ENV is not production or staging")
         if os.getenv("AUTH_MODE", "oidc").lower() != "oidc":
