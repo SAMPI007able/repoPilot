@@ -114,6 +114,10 @@ AUTH_MODE=oidc
 OIDC_ISSUER=https://YOUR_TENANT.auth0.com/
 OIDC_AUDIENCE=https://api.example.com
 OIDC_JWKS_URL=https://YOUR_TENANT.auth0.com/.well-known/jwks.json
+AUTH0_VERIFICATION_RESEND_ENABLED=true
+AUTH0_MANAGEMENT_CLIENT_ID=...
+AUTH0_MANAGEMENT_CLIENT_SECRET=...
+AUTH0_VERIFICATION_CLIENT_ID=YOUR_AUTH0_SPA_CLIENT_ID
 
 OAUTH_TOKEN_ENCRYPTION_KEY=...
 POSTHOG_API_KEY=...
@@ -240,6 +244,21 @@ The following pairs must match exactly:
 
 Auth0 social-login credentials are separate from the GitHub/GitLab/Bitbucket
 OAuth applications used to access repositories.
+
+### Verification-email resend
+
+Create a dedicated Auth0 Machine-to-Machine application and authorize it for
+the Auth0 Management API with only the `update:users` permission. Put that
+application's ID and secret in the Railway backend variables above; never add
+the secret to Vercel or a `VITE_*` variable. `AUTH0_VERIFICATION_CLIENT_ID` is
+the ordinary SPA application client ID and lets Auth0 apply that application's
+post-verification redirect. Ensure the Auth0 Verification Email template is
+enabled before turning on `AUTH0_VERIFICATION_RESEND_ENABLED`.
+
+The application accepts resend requests only from the currently authenticated,
+unverified identity. It does not accept an email address or Auth0 user ID from
+the browser. The server default is three requests per user per hour, configured
+with `RATE_LIMIT_EMAIL_VERIFICATION_HOURLY` and its `_WINDOW_SECONDS` companion.
 
 ## Secret rotation
 

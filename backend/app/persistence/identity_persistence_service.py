@@ -71,6 +71,21 @@ class IdentityPersistenceService:
                 lastLoginAt=user.last_login_at,
             )
 
+    def identity_subject(self, user_id: str, issuer: str) -> str:
+        normalized_issuer = issuer.rstrip("/") + "/"
+        with self.database.session() as session:
+            identity = session.scalar(select(AuthIdentityRow).where(
+                AuthIdentityRow.user_id == user_id,
+                AuthIdentityRow.issuer == normalized_issuer,
+            ))
+            if identity is None:
+                raise AuthenticationError(
+                    409,
+                    "AUTH_IDENTITY_UNAVAILABLE",
+                    "The current identity cannot receive an Auth0 verification email.",
+                )
+            return identity.subject
+
     @staticmethod
     def _principal(user: UserRow) -> Principal:
         return Principal(

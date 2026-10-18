@@ -94,6 +94,15 @@ export async function getCurrentUser(): Promise<CurrentUser> {
   return (await api.get<CurrentUser>('/me')).data
 }
 
+export interface VerificationEmailResult {
+  message: string
+  retryAfterSeconds: number
+}
+
+export async function resendVerificationEmail(): Promise<VerificationEmailResult> {
+  return (await api.post<VerificationEmailResult>('/auth/verification-email/resend')).data
+}
+
 export async function getFeatureFlags(): Promise<FeatureFlagsResponse> {
   return (await api.get<FeatureFlagsResponse>('/feature-flags')).data
 }

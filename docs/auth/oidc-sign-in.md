@@ -59,6 +59,12 @@ AUTH_MODE=oidc
 OIDC_ISSUER=https://<your-tenant>.auth0.com/
 OIDC_AUDIENCE=https://api.testforge.example.com
 OIDC_JWKS_URL=https://<your-tenant>.auth0.com/.well-known/jwks.json
+
+# Optional resend action for unverified users
+AUTH0_VERIFICATION_RESEND_ENABLED=true
+AUTH0_MANAGEMENT_CLIENT_ID=<machine-to-machine-client-id>
+AUTH0_MANAGEMENT_CLIENT_SECRET=<machine-to-machine-client-secret>
+AUTH0_VERIFICATION_CLIENT_ID=<your-web-client-id>
 ```
 
 Notes:
@@ -66,6 +72,9 @@ Notes:
 - OIDC_ISSUER must match the issuer claim in the provider-issued token.
 - OIDC_AUDIENCE must match the expected audience claim in the token.
 - OIDC_JWKS_URL must point to the JWKS endpoint for signature validation.
+- For resend support, authorize the Machine-to-Machine application for the
+  Auth0 Management API with only `update:users`, and enable Auth0's Verification
+  Email template. Keep the management secret on the backend only.
 
 ## 5. Configure frontend environment variables
 

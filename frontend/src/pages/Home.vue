@@ -8,6 +8,7 @@ import UserMenu from '../components/UserMenu.vue'
 import { useWorkspaceStore } from '../stores/workspace'
 import { useAuthStore } from '../stores/auth'
 import type { SignInMethod } from '../stores/auth'
+import { extractAPIError, resendVerificationEmail } from '../services/api'
 
 const workspaceStore = useWorkspaceStore()
 const auth = useAuthStore()
@@ -18,9 +19,13 @@ const route = useRoute()
 const router = useRouter()
 const signInOpen = ref(false)
 const verificationError = ref<string | null>(null)
+const verificationMessage = ref<string | null>(null)
+const resendBusy = ref(false)
+const resendCooldown = ref(0)
 const repositoriesPage = computed(() => route.name === 'repositories')
 const verificationRequired = computed(() => Boolean(auth.user && !auth.user.emailVerified))
 const pendingBuildKey = 'testforge.pendingWorkspaceBuild'
+let resendCooldownTimer: number | null = null
 
 function refreshWorkspacesIfStale() {
   if (auth.authenticated && !verificationRequired.value && document.visibilityState === 'visible') {
@@ -52,6 +57,7 @@ onMounted(() => {
 onUnmounted(() => {
   window.removeEventListener('focus', refreshWorkspacesIfStale)
   document.removeEventListener('visibilitychange', refreshWorkspacesIfStale)
+  if (resendCooldownTimer !== null) window.clearInterval(resendCooldownTimer)
 })
 
 async function signOut() {
@@ -121,6 +127,7 @@ async function importRepository(repository: import('../types/api').ProviderRepos
 
 async function refreshVerification() {
   verificationError.value = null
+  verificationMessage.value = null
   try {
     const refreshed = await auth.refreshUser()
     if (!refreshed) return
@@ -132,8 +139,39 @@ async function refreshVerification() {
   }
 }
 
+function startResendCooldown(seconds: number) {
+  resendCooldown.value = Math.max(1, seconds)
+  if (resendCooldownTimer !== null) window.clearInterval(resendCooldownTimer)
+  resendCooldownTimer = window.setInterval(() => {
+    resendCooldown.value = Math.max(0, resendCooldown.value - 1)
+    if (resendCooldown.value === 0 && resendCooldownTimer !== null) {
+      window.clearInterval(resendCooldownTimer)
+      resendCooldownTimer = null
+    }
+  }, 1000)
+}
+
+async function resendVerification() {
+  if (resendBusy.value || resendCooldown.value > 0) return
+  verificationError.value = null
+  verificationMessage.value = null
+  resendBusy.value = true
+  try {
+    const result = await resendVerificationEmail()
+    verificationMessage.value = result.message
+    startResendCooldown(result.retryAfterSeconds)
+  } catch (error) {
+    verificationError.value = extractAPIError(error, 'Unable to resend the verification email.').message
+  } finally {
+    resendBusy.value = false
+  }
+}
+
 watch(verificationRequired, (required) => {
-  if (!required) verificationError.value = null
+  if (!required) {
+    verificationError.value = null
+    verificationMessage.value = null
+  }
 })
 </script>
 
@@ -225,15 +263,35 @@ watch(verificationRequired, (required) => {
           Check <strong>{{ auth.user?.primaryEmail }}</strong> for the verification email. Workspaces, AI requests,
           repository connections, and previews stay paused until your address is verified.
         </p>
-        <button
-          class="verification-card__refresh"
-          type="button"
-          :disabled="auth.loading"
-          @click="refreshVerification"
-        >
-          <RefreshCw :class="{ spin: auth.loading }" aria-hidden="true" />
-          {{ auth.loading ? 'Checking verification…' : 'I’ve verified — refresh' }}
-        </button>
+        <div class="verification-card__actions">
+          <button
+            class="verification-card__refresh"
+            type="button"
+            :disabled="auth.loading || resendBusy"
+            @click="refreshVerification"
+          >
+            <RefreshCw :class="{ spin: auth.loading }" aria-hidden="true" />
+            {{ auth.loading ? 'Checking verification…' : 'I’ve verified — refresh' }}
+          </button>
+          <button
+            class="verification-card__refresh verification-card__resend"
+            type="button"
+            :disabled="resendBusy || auth.loading || resendCooldown > 0"
+            @click="resendVerification"
+          >
+            <MailCheck aria-hidden="true" />
+            {{
+              resendBusy
+                ? 'Sending…'
+                : resendCooldown > 0
+                  ? `Resend available in ${resendCooldown}s`
+                  : 'Resend verification email'
+            }}
+          </button>
+        </div>
+        <p v-if="verificationMessage" class="verification-card__success" role="status">
+          {{ verificationMessage }}
+        </p>
         <p v-if="verificationError" class="verification-card__error" role="alert">{{ verificationError }}</p>
       </section>
     </div>

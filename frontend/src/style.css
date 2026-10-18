@@ -3288,7 +3288,7 @@ button {
   letter-spacing: -0.035em;
 }
 
-.verification-card > p:not(.verification-card__eyebrow, .verification-card__error) {
+.verification-card > p:not(.verification-card__eyebrow, .verification-card__error, .verification-card__success) {
   margin: 0.9rem auto 0;
   color: #94a3b8;
   font-size: 0.9rem;
@@ -3317,6 +3317,24 @@ button {
   transition: border-color 160ms ease, background-color 160ms ease, transform 160ms ease;
 }
 
+.verification-card__actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.7rem;
+  margin-top: 1.35rem;
+}
+
+.verification-card__actions .verification-card__refresh {
+  margin-top: 0;
+}
+
+.verification-card__resend {
+  border-color: rgba(148, 163, 184, 0.4);
+  background: rgba(148, 163, 184, 0.09);
+  color: #e2e8f0;
+}
+
 .verification-card__refresh:hover:not(:disabled),
 .verification-card__refresh:focus-visible {
   border-color: var(--brand-400);
@@ -3338,6 +3356,13 @@ button {
 .verification-card__error {
   margin: 0.9rem 0 0;
   color: #fda4af;
+  font-size: 0.78rem;
+  line-height: 1.45;
+}
+
+.verification-card__success {
+  margin: 0.9rem 0 0;
+  color: #86efac;
   font-size: 0.78rem;
   line-height: 1.45;
 }
@@ -4590,6 +4615,16 @@ button {
   border-color: rgba(79, 70, 229, 0.34);
   background: rgba(79, 70, 229, 0.09);
   color: #312e81;
+}
+
+:root[data-theme='light'] .verification-card__resend {
+  border-color: rgba(100, 116, 139, 0.3);
+  background: rgba(100, 116, 139, 0.08);
+  color: #334155;
+}
+
+:root[data-theme='light'] .verification-card__success {
+  color: #15803d;
 }
 
 @media (max-width: 560px) {

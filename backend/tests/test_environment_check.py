@@ -101,6 +101,15 @@ class EnvironmentCheckTests(unittest.TestCase):
             errors, _ = validate("preview-worker")
         self.assertTrue(any("must differ" in error for error in errors))
 
+    def test_verification_resend_requires_management_credentials_when_enabled(self):
+        environment = {
+            "AUTH0_VERIFICATION_RESEND_ENABLED": "true",
+            "AUTH0_MANAGEMENT_CLIENT_ID": "configured",
+        }
+        with patch.dict(os.environ, environment, clear=True):
+            errors, _ = validate("backend")
+        self.assertTrue(any("AUTH0_MANAGEMENT_CLIENT_SECRET" in error for error in errors))
+
 
 if __name__ == "__main__":
     unittest.main()

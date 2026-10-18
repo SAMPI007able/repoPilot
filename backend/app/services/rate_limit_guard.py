@@ -33,6 +33,7 @@ class RateLimitGuard:
         "preview_extension": "Daily preview-extension limit reached.",
         "browser_session_creation": "Daily browser-session limit reached.",
         "screenshot_generation": "Daily screenshot-generation limit reached.",
+        "email_verification": "Verification email limit reached. Please try again later.",
     }
 
     def __init__(self, service: RateLimitService, settings: RateLimitSettings) -> None:

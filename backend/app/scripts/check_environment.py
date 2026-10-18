@@ -80,6 +80,10 @@ def validate(target: str) -> tuple[list[str], list[str]]:
             errors.append("AUTH_MODE must be oidc in production")
         else:
             errors.extend(f"{name} is missing" for name in OIDC_REQUIRED if not present(name))
+        if os.getenv("AUTH0_VERIFICATION_RESEND_ENABLED", "false").lower() == "true":
+            for name in ("AUTH0_MANAGEMENT_CLIENT_ID", "AUTH0_MANAGEMENT_CLIENT_SECRET"):
+                if not present(name):
+                    errors.append(f"{name} is missing while verification-email resend is enabled")
         if os.getenv("ARTIFACT_STORE", "local").lower() != "s3":
             errors.append("ARTIFACT_STORE must be s3 for a multi-instance deployment")
         else:

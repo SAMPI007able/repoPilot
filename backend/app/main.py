@@ -128,6 +128,11 @@ from app.persistence.support_persistence_service import (
     SupportTicketTransitionError,
 )
 from app.services.email_service import EmailService, EmailSettings
+from app.services.email_verification_service import (
+    Auth0EmailVerificationService,
+    Auth0VerificationSettings,
+    EmailVerificationError,
+)
 from app.services.support_service import MAX_ATTACHMENT_BYTES, SupportService, SupportValidationError
 
 from fastapi.middleware.cors import CORSMiddleware
@@ -198,6 +203,18 @@ async def handle_authentication_error(request: Request, exc: AuthenticationError
         content=envelope.model_dump(mode="json", by_alias=True),
         headers=headers,
     )
+
+
+@app.exception_handler(EmailVerificationError)
+async def handle_email_verification_error(request: Request, exc: EmailVerificationError):
+    envelope = PreviewErrorEnvelope(
+        code=exc.code,
+        message=exc.message,
+        retryable=exc.retryable,
+        details={},
+        correlationId=_correlation_id(request),
+    )
+    return JSONResponse(status_code=exc.status_code, content=envelope.model_dump(mode="json", by_alias=True))
 
 
 @app.exception_handler(QuotaAPIError)
@@ -276,6 +293,7 @@ database.create_schema()
 feature_flag_service = FeatureFlagPersistenceService(database)
 feature_flag_service.ensure_defaults()
 identity_persistence_service = IdentityPersistenceService(database)
+email_verification_service = Auth0EmailVerificationService(Auth0VerificationSettings.from_env())
 chat_persistence_service = ChatPersistenceService(database)
 test_generation_persistence_service = TestGenerationPersistenceService(database)
 ai_response_cache_service = AIResponseCacheService()
@@ -392,6 +410,11 @@ class GenerateTestsResponse(BaseModel):
     type: str
     prompt: str
     markdown: str
+
+
+class VerificationEmailResponse(BaseModel):
+    message: str
+    retryAfterSeconds: int
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -511,6 +534,31 @@ def get_me(principal: Principal = Depends(auth.principal)):
     })
     telemetry.capture(principal.user_id, "user_registered", {"source": "backend_me"})
     return user
+
+
+@app.post("/auth/verification-email/resend", response_model=VerificationEmailResponse, status_code=202)
+def resend_verification_email(
+    response: Response,
+    principal: Principal = Depends(auth.principal),
+):
+    if principal.email_verified:
+        raise EmailVerificationError(
+            409,
+            "EMAIL_ALREADY_VERIFIED",
+            "This email address is already verified.",
+        )
+    decision = rate_limit_guard.enforce(principal, "email_verification", fail_closed=True)
+    subject = identity_persistence_service.identity_subject(
+        principal.user_id,
+        os.getenv("OIDC_ISSUER", ""),
+    )
+    email_verification_service.send(subject)
+    _apply_rate_headers(response, decision)
+    telemetry.capture(principal.user_id, "verification_email_resent", {})
+    return VerificationEmailResponse(
+        message="Verification email sent. Check your inbox and spam folder.",
+        retryAfterSeconds=60,
+    )
 
 
 @app.get("/integrations", response_model=list[ProviderConnection])
