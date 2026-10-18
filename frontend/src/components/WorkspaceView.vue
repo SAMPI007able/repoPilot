@@ -1,13 +1,16 @@
 <script setup lang="ts">
 import { AlertTriangle, FlaskConical, GitBranch, GitCompare, LoaderCircle, MessageSquareText, MonitorPlay, Network, RefreshCw } from '@lucide/vue'
-import { computed, defineAsyncComponent, onBeforeUnmount, ref, shallowRef, watch } from 'vue'
+import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
 import BuildPipeline from './BuildPipeline.vue'
+import FullscreenButton from './FullscreenButton.vue'
 import DependencyGraph from './DependencyGraph.vue'
 import RepoStatsPanel from './RepoStatsPanel.vue'
 import { useGenerationStore } from '../stores/generation'
 import { useFeatureFlagStore } from '../stores/features'
 import type { GraphData, GraphLayoutInput } from '../services/graphLayout'
 import type { RepositoryMetadata } from '../types/api'
+import { useFullscreen } from '../composables/useFullscreen'
+import { smoothScrollToElement } from '../utils/scroll'
 import type { WorkspaceListItem, WorkspaceStage } from '../stores/workspace'
 
 const props = defineProps<{
@@ -126,6 +129,76 @@ const tabMeta = {
 } as const
 
 const insightItems = [] as Array<{ title: string; path: string; severity: string; category: string; description: string }>
+
+// Only the tab bar is pinned while scrolling; switching tools scrolls gently to the active panel.
+const tabsRef = ref<HTMLElement | null>(null)
+const tabPanelRef = ref<HTMLElement | null>(null)
+const dependencyPanelRef = ref<HTMLElement | null>(null)
+const tabsStuck = ref(false)
+const { isFullscreen: graphFullscreen, toggle: toggleGraphFullscreen } = useFullscreen(dependencyPanelRef)
+let stuckFrame = 0
+
+function updateTabsStuck() {
+  cancelAnimationFrame(stuckFrame)
+  stuckFrame = requestAnimationFrame(() => {
+    const tabs = tabsRef.value
+    tabsStuck.value = Boolean(tabs && window.scrollY > 0 && tabs.getBoundingClientRect().top <= 1)
+  })
+}
+
+// Tab panels are async components, so the wrapper is empty until the chunk loads and renders.
+// Scrolling before that measures an empty panel at the end of a too-short page and stops at the graph.
+function waitForPanelContent(panel: HTMLElement, timeoutMs = 2000) {
+  return new Promise<void>((resolve) => {
+    if (panel.offsetHeight > 0) return resolve()
+    const observer = new ResizeObserver(() => {
+      if (panel.offsetHeight > 0) finish()
+    })
+    const timer = window.setTimeout(finish, timeoutMs)
+    function finish() {
+      observer.disconnect()
+      window.clearTimeout(timer)
+      resolve()
+    }
+    observer.observe(panel)
+  })
+}
+
+let tabScrollRequest = 0
+
+async function selectTab(id: Parameters<typeof generationStore.setTab>[0]) {
+  const request = ++tabScrollRequest
+  generationStore.setTab(id)
+  await nextTick()
+  const panel = tabPanelRef.value
+  if (!panel) return
+  await waitForPanelContent(panel)
+  // Let the freshly rendered panel finish layout before measuring its position.
+  await new Promise(requestAnimationFrame)
+  if (request !== tabScrollRequest) return
+  smoothScrollToElement(panel, (tabsRef.value?.offsetHeight ?? 0) + 12)
+}
+
+// When a build or re-index finishes successfully, move the user from the pipeline to the chat.
+watch(
+  () => [props.workspace.id, props.workspace.status] as const,
+  ([id, status], [previousId, previousStatus]) => {
+    const succeeded = props.stages.length > 0 && props.stages.every((stage) => stage.status === 'done')
+    if (id === previousId && previousStatus !== 'ready' && status === 'ready' && succeeded) {
+      void selectTab('ask')
+    }
+  },
+)
+
+onMounted(() => {
+  window.addEventListener('scroll', updateTabsStuck, { passive: true })
+  updateTabsStuck()
+})
+
+onBeforeUnmount(() => {
+  cancelAnimationFrame(stuckFrame)
+  window.removeEventListener('scroll', updateTabsStuck)
+})
 </script>
 
 <template>
@@ -166,27 +239,30 @@ const insightItems = [] as Array<{ title: string; path: string; severity: string
             <option v-for="branch in availableBranches" :key="branch" :value="branch">{{ branch }}</option>
           </select>
           <button
+            class="workspace-branch-control__reindex"
             type="button"
             :disabled="workspace.status !== 'ready' || reindexing"
+            :aria-label="reindexing ? 'Re-indexing repository' : 'Re-index selected branch'"
+            :title="reindexing ? 'Re-indexing…' : 'Re-index selected branch'"
             @click="emit('reindex', selectedBranch || undefined)"
           >
-            <LoaderCircle v-if="reindexing" class="spin" :size="14" aria-hidden="true" />
-            <RefreshCw v-else :size="14" aria-hidden="true" />
-            {{ reindexing ? 'Re-indexing…' : 'Re-index' }}
+            <LoaderCircle v-if="reindexing" class="spin" :size="15" aria-hidden="true" />
+            <RefreshCw v-else :size="15" aria-hidden="true" />
           </button>
           <span v-if="loadingBranches" class="workspace-branch-control__loading">Loading branches…</span>
         </div>
       </div>
     </header>
 
-    <nav class="workspace-tabs">
+    <nav ref="tabsRef" class="workspace-tabs" :class="{ 'workspace-tabs--stuck': tabsStuck }" aria-label="Workspace tools">
       <button
         v-for="item in generationStore.tabs"
         :key="item.id"
         class="workspace-tabs__item"
         :class="{ 'workspace-tabs__item--active': generationStore.tab === item.id }"
         type="button"
-        @click="generationStore.setTab(item.id)"
+        :aria-current="generationStore.tab === item.id ? 'page' : undefined"
+        @click="selectTab(item.id)"
       >
         <component :is="tabMeta[item.id].icon" :size="14" />
         {{ tabMeta[item.id].label }}
@@ -205,10 +281,13 @@ const insightItems = [] as Array<{ title: string; path: string; severity: string
       />
     </section>
 
-    <section class="panel panel-pad dependency-panel">
+    <section ref="dependencyPanelRef" class="panel panel-pad dependency-panel fullscreen-panel">
       <div class="panel-heading dependency-panel__heading">
         <h2><Network :size="17" />Dependency graph</h2>
-        <span class="panel-heading__meta">{{ graph.nodes.length }} nodes · {{ graph.edges.length }} edges</span>
+        <div class="panel-heading__actions">
+          <span class="panel-heading__meta">{{ graph.nodes.length }} nodes · {{ graph.edges.length }} edges</span>
+          <FullscreenButton :active="graphFullscreen" label="Dependency graph" @toggle="toggleGraphFullscreen" />
+        </div>
       </div>
       <DependencyGraph v-if="graph.nodes.length" :nodes="graph.nodes" :edges="graph.edges" />
       <div v-else class="empty-state-box">
@@ -216,6 +295,7 @@ const insightItems = [] as Array<{ title: string; path: string; severity: string
       </div>
     </section>
 
+    <div ref="tabPanelRef" class="workspace-tab-panel">
     <AskPanel
       v-if="generationStore.tab === 'ask'"
       :workspace-name="workspace.repoName"
@@ -271,6 +351,7 @@ const insightItems = [] as Array<{ title: string; path: string; severity: string
       @update:selected-file="generationStore.setImpactFile"
       @analyze="generationStore.runImpactAnalysis"
     />
+    </div>
   </div>
 </template>
 

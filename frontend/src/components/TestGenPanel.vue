@@ -1,4 +1,7 @@
 <script setup lang="ts">
+import { ref } from 'vue'
+import FullscreenButton from './FullscreenButton.vue'
+import { useFullscreen } from '../composables/useFullscreen'
 import type { AIQueryResponse } from '../types/api'
 import MarkdownRenderer from './MarkdownRenderer.vue'
 
@@ -25,13 +28,19 @@ const emit = defineEmits<{
   (e: 'generate:scenario', value?: string): void
   (e: 'generate:file', value?: string): void
 }>()
+
+const panelRef = ref<HTMLElement | null>(null)
+const { isFullscreen, toggle: toggleFullscreen } = useFullscreen(panelRef)
 </script>
 
 <template>
-  <div class="panel panel-pad">
+  <div ref="panelRef" class="panel panel-pad fullscreen-panel">
     <div class="panel-heading">
       <h2>Generate integration tests</h2>
-      <span class="panel-heading__meta">{{ mode === 'scenario' ? 'Requirement -> cross-module tests' : 'File -> all scenarios' }}</span>
+      <div class="panel-heading__actions">
+        <span class="panel-heading__meta">{{ mode === 'scenario' ? 'Requirement -> cross-module tests' : 'File -> all scenarios' }}</span>
+        <FullscreenButton :active="isFullscreen" label="Generate integration tests" @toggle="toggleFullscreen" />
+      </div>
     </div>
 
     <div class="mode-switch">

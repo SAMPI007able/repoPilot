@@ -2,6 +2,7 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { ArrowLeft, ChevronDown, RefreshCw, Search, ShieldAlert } from '@lucide/vue'
 import { useAuthStore } from '../stores/auth'
+import { useDialogStore } from '../stores/dialog'
 import {
   deleteAdminUser, getAdminDashboard, listAdminBrowserSessions, listAdminFeatureFlags,
   listAdminLogs, listAdminPreviews, listAdminUsage, listAdminUsers, setAdminUserSuspended,
@@ -15,6 +16,7 @@ import type {
 } from '../types/api'
 
 const auth = useAuthStore()
+const dialog = useDialogStore()
 const dashboard = ref<AdminDashboard | null>(null)
 const users = ref<AdminUser[]>([])
 const previews = ref<AdminPreview[]>([])
@@ -73,7 +75,13 @@ async function toggleUser(user: AdminUser) {
   users.value = users.value.map((item) => item.id === updated.id ? updated : item)
 }
 async function removeUser(user: AdminUser) {
-  if (!window.confirm(`Delete ${user.primaryEmail}? This cannot be undone.`)) return
+  const confirmed = await dialog.confirm({
+    title: 'Delete user?',
+    message: `${user.primaryEmail} and all of their workspaces will be permanently deleted. This cannot be undone.`,
+    confirmLabel: 'Delete user',
+    tone: 'danger',
+  })
+  if (!confirmed) return
   await deleteAdminUser(user.id); await loadAll()
 }
 async function stopPreview(id: string) { await terminateAdminPreview(id); await loadAll() }
@@ -83,7 +91,11 @@ async function toggleFlag(flag: AdminFeatureFlag) {
   flags.value = flags.value.map((item) => item.key === updated.key ? updated : item)
 }
 async function setTicketStatus(ticket: AdminSupportTicket, status: Exclude<SupportTicketStatus, 'OPEN'>) {
-  if (status === 'COMPLETED' && !window.confirm(`Mark "${ticket.subject}" as completed? The requester will be emailed.`)) return
+  if (status === 'COMPLETED' && !await dialog.confirm({
+    title: 'Mark ticket completed?',
+    message: `"${ticket.subject}" will be closed and the requester will be emailed. Completed tickets cannot be reopened.`,
+    confirmLabel: 'Mark completed',
+  })) return
   updatingTicketId.value = ticket.id
   supportError.value = ''
   try {

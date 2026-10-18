@@ -2,7 +2,9 @@
 import { MessageSquareText, Plus, SendHorizontal, Sparkles } from '@lucide/vue'
 import { nextTick, ref, watch } from 'vue'
 import type { ChatMessage } from '../types/api'
+import FullscreenButton from './FullscreenButton.vue'
 import MarkdownRenderer from './MarkdownRenderer.vue'
+import { useFullscreen } from '../composables/useFullscreen'
 
 const props = defineProps<{
   workspaceName: string
@@ -33,10 +35,13 @@ watch(
   },
   { flush: 'post' },
 )
+
+const panelRef = ref<HTMLElement | null>(null)
+const { isFullscreen, toggle: toggleFullscreen } = useFullscreen(panelRef)
 </script>
 
 <template>
-  <div class="panel ask-panel">
+  <div ref="panelRef" class="panel ask-panel fullscreen-panel">
     <div class="panel-heading ask-panel__header">
       <h2 class="panel-heading__title">
         <MessageSquareText :size="14" />
@@ -47,6 +52,7 @@ watch(
         <button v-if="messages.length" class="btn btn-ghost ask-panel__new" type="button" :disabled="busy" @click="emit('new-chat')">
           <Plus :size="13" /> New chat
         </button>
+        <FullscreenButton :active="isFullscreen" label="Ask the codebase" @toggle="toggleFullscreen" />
       </div>
     </div>
 

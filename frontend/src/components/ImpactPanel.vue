@@ -1,4 +1,7 @@
 <script setup lang="ts">
+import { ref } from 'vue'
+import FullscreenButton from './FullscreenButton.vue'
+import { useFullscreen } from '../composables/useFullscreen'
 import type { ImpactAnalysisResponse } from '../types/api'
 
 defineProps<{
@@ -13,13 +16,19 @@ const emit = defineEmits<{
   (e: 'update:selectedFile', value: string): void
   (e: 'analyze', value?: string): void
 }>()
+
+const panelRef = ref<HTMLElement | null>(null)
+const { isFullscreen, toggle: toggleFullscreen } = useFullscreen(panelRef)
 </script>
 
 <template>
-  <div class="panel panel-pad">
+  <div ref="panelRef" class="panel panel-pad fullscreen-panel">
     <div class="panel-heading">
       <h2>Impact analysis</h2>
-      <span class="panel-heading__meta">Modify a file -> see blast radius</span>
+      <div class="panel-heading__actions">
+        <span class="panel-heading__meta">Modify a file -> see blast radius</span>
+        <FullscreenButton :active="isFullscreen" label="Impact analysis" @toggle="toggleFullscreen" />
+      </div>
     </div>
 
     <div class="inline-form">
