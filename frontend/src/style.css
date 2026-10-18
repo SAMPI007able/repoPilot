@@ -513,7 +513,7 @@ button {
   gap: 0.45rem;
   font-size: 0.9rem;
   font-weight: 500;
-  color: #e5edf8;
+  color: var(--text);
 }
 
 .workspace-row__url {
@@ -4810,6 +4810,7 @@ html.has-maximized-panel {
   height: auto;
   flex: 1;
   min-height: 20rem;
+  margin-bottom: 1rem;
 }
 
 .ask-panel.fullscreen-panel:fullscreen,
