@@ -24,6 +24,7 @@ FRONTEND_REQUIRED = (
 )
 OIDC_REQUIRED = ("OIDC_ISSUER", "OIDC_AUDIENCE", "OIDC_JWKS_URL")
 S3_REQUIRED = ("ARTIFACT_S3_BUCKET", "ARTIFACT_S3_REGION")
+PREVIEW_WORKER_REQUIRED = ("APP_ENV", "DATABASE_URL", "REDIS_URL", "ARTIFACT_STORE")
 
 
 def present(name: str) -> bool:
@@ -38,6 +39,8 @@ def validate(target: str) -> tuple[list[str], list[str]]:
         required.extend(BACKEND_REQUIRED)
     if target in {"frontend", "all"}:
         required.extend(FRONTEND_REQUIRED)
+    if target in {"preview-worker", "all"}:
+        required.extend(PREVIEW_WORKER_REQUIRED)
     errors.extend(f"{name} is missing" for name in required if not present(name))
 
     if target in {"backend", "all"}:
@@ -89,6 +92,12 @@ def validate(target: str) -> tuple[list[str], list[str]]:
             errors.append("REDIS_URL must use redis:// or rediss://")
         if os.getenv("PREVIEW_TRUSTED_LOCAL_EXECUTION", "false").lower() == "true":
             errors.append("PREVIEW_TRUSTED_LOCAL_EXECUTION must be false in production")
+        preview_enabled = os.getenv("PREVIEW_PRODUCTION_ENABLED", "false").lower() == "true"
+        preview_provider = os.getenv("PREVIEW_PROVIDER", "local-docker").strip().lower()
+        if preview_enabled and preview_provider != "railway-sandbox":
+            errors.append(
+                "PREVIEW_PROVIDER must be railway-sandbox when production previews are enabled"
+            )
         if not present("POSTHOG_API_KEY"):
             warnings.append("POSTHOG_API_KEY is absent; backend analytics will be disabled")
         provider_configured = any(present(f"{provider}_OAUTH_CLIENT_ID") for provider in ("GITHUB", "GITLAB", "BITBUCKET"))
@@ -103,6 +112,28 @@ def validate(target: str) -> tuple[list[str], list[str]]:
         if not present("VITE_POSTHOG_API_KEY"):
             warnings.append("VITE_POSTHOG_API_KEY is absent; frontend analytics will be disabled")
 
+    if target in {"preview-worker", "all"}:
+        provider = os.getenv("PREVIEW_PROVIDER", "local-docker").strip().lower()
+        if provider != "railway-sandbox":
+            errors.append("PREVIEW_PROVIDER must be railway-sandbox on the production preview worker")
+        for name in ("RAILWAY_API_TOKEN", "RAILWAY_SANDBOX_ENVIRONMENT_ID"):
+            if not present(name):
+                errors.append(f"{name} is missing")
+        if os.getenv("PREVIEW_RAILWAY_ACKNOWLEDGE_DEDICATED_ENVIRONMENT", "false").lower() != "true":
+            errors.append(
+                "PREVIEW_RAILWAY_ACKNOWLEDGE_DEDICATED_ENVIRONMENT must be true after isolating the sandbox environment"
+            )
+        current_environment = os.getenv("RAILWAY_ENVIRONMENT_ID", "").strip()
+        sandbox_environment = os.getenv("RAILWAY_SANDBOX_ENVIRONMENT_ID", "").strip()
+        if current_environment and sandbox_environment == current_environment:
+            errors.append("RAILWAY_SANDBOX_ENVIRONMENT_ID must differ from the worker environment")
+        if os.getenv("PREVIEW_TRUSTED_LOCAL_EXECUTION", "false").lower() == "true":
+            errors.append("PREVIEW_TRUSTED_LOCAL_EXECUTION must be false on the Railway preview worker")
+        if os.getenv("ARTIFACT_STORE", "local").lower() != "s3":
+            errors.append("ARTIFACT_STORE must be s3 on the production preview worker")
+        else:
+            errors.extend(f"{name} is missing" for name in S3_REQUIRED if not present(name))
+
     for name in ("FRONTEND_URL", "OAUTH_CALLBACK_BASE_URL", "VITE_API_BASE_URL", "VITE_OIDC_REDIRECT_URI"):
         if present(name) and urlparse(os.environ[name]).scheme != "https":
             if os.getenv("APP_ENV", "").lower() == "production":
@@ -114,7 +145,10 @@ def validate(target: str) -> tuple[list[str], list[str]]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Validate TestForge deployment environment variables.")
-    parser.add_argument("--target", choices=("backend", "frontend", "all"), default="backend")
+    parser.add_argument(
+        "--target", choices=("backend", "frontend", "preview-worker", "all"),
+        default="backend",
+    )
     args = parser.parse_args()
     errors, warnings = validate(args.target)
     for warning in warnings:

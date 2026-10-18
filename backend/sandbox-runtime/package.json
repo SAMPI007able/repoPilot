@@ -1,0 +1,8 @@
+{
+  "name": "testforge-railway-sandbox-runtime",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "railway": "3.16.0"
+  }
+}

@@ -6,7 +6,8 @@ from app.persistence.artifact_store import create_artifact_store
 from app.persistence.database import Database
 from app.persistence.preview_persistence_service import PreviewConflictError, PreviewPersistenceService
 from app.services.preview_logs import PreviewLogService
-from app.services.sandbox_provider import LocalDockerSandboxProvider, SandboxExecutionError
+from app.services.sandbox_provider import SandboxExecutionError
+from app.services.sandbox_provider_factory import create_sandbox_provider
 from app.config.rate_limit_settings import RateLimitSettings
 from app.services.rate_limit_service import RateLimitBackendUnavailable, RateLimitService
 from app.services.telemetry import Telemetry
@@ -26,26 +27,35 @@ def _services():
     return database, PreviewPersistenceService(database), PreviewLogService(store)
 
 
-def start_preview(preview_id: str, environment: dict[str, str]) -> None:
+def start_preview(
+    preview_id: str, environment: dict[str, str],
+    repository_authorization: str | None = None,
+) -> None:
     database, persistence, logs = _services()
-    sensitive_values = list(environment.values())
+    sensitive_values = [*environment.values(), *([repository_authorization] if repository_authorization else [])]
     log = lambda text: logs.append(preview_id, text, sensitive_values)
-    provider = LocalDockerSandboxProvider()
+    provider = None
     try:
-        if os.getenv("PREVIEW_TRUSTED_LOCAL_EXECUTION", "false").lower() != "true":
+        preview = persistence.get(preview_id)
+        if (
+            preview.provider == "local-docker"
+            and os.getenv("PREVIEW_TRUSTED_LOCAL_EXECUTION", "false").lower() != "true"
+        ):
             _fail(
                 persistence, preview_id, "PREVIEW_EXECUTION_DISABLED",
                 "Trusted local preview execution is disabled on this worker.",
             )
             return
-        preview = persistence.get(preview_id)
+        provider = create_sandbox_provider(preview.provider)
         if preview.status != PreviewStatus.QUEUED:
             return
 
         def transition(status: PreviewStatus, message: str, state: dict | None) -> None:
             persistence.transition(preview_id, status, message, provider_state=state)
 
-        result = provider.deploy(preview, environment, transition, log)
+        result = provider.deploy(
+            preview, environment, transition, log, repository_authorization,
+        )
         persistence.transition(
             preview_id, PreviewStatus.READY, "Preview is ready.",
             preview_url=result.preview_url, internal_url=result.internal_url,
@@ -59,6 +69,7 @@ def start_preview(preview_id: str, environment: dict[str, str]) -> None:
     finally:
         _release_terminal_slot(persistence, preview_id)
         environment.clear()
+        repository_authorization = None
         database.close()
 
 
@@ -70,7 +81,7 @@ def stop_preview(preview_id: str, expired: bool = False) -> None:
             return
         if preview.status != PreviewStatus.STOPPING:
             persistence.transition(preview_id, PreviewStatus.STOPPING, "Preview cleanup started.")
-        LocalDockerSandboxProvider().cleanup(
+        create_sandbox_provider(preview.provider).cleanup(
             persistence.provider_state(preview_id),
             lambda text: logs.append(preview_id, text),
         )

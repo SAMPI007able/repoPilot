@@ -18,7 +18,7 @@ class FakeQueue:
         self.starts = []
         self.stops = []
 
-    def enqueue_start(self, preview_id, environment) -> None:
+    def enqueue_start(self, preview_id, environment, repository_authorization=None) -> None:
         self.starts.append((preview_id, environment.copy()))
 
     def enqueue_stop(self, preview_id, expired=False) -> None:

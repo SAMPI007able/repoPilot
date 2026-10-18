@@ -1,9 +1,11 @@
 import os
+import base64
 import shlex
 import time
 import http.client
 import urllib.error
 import urllib.request
+import urllib.parse
 from dataclasses import dataclass
 from typing import Callable, Protocol
 
@@ -30,6 +32,7 @@ class SandboxProvider(Protocol):
         environment: dict[str, str],
         transition: Callable[[PreviewStatus, str, dict | None], None],
         log: Callable[[str], None],
+        repository_authorization: str | None = None,
     ) -> SandboxResult: ...
     def cleanup(self, provider_state: dict, log: Callable[[str], None]) -> None: ...
 
@@ -38,6 +41,7 @@ class LocalDockerSandboxProvider:
     """Trusted-development adapter. It is deliberately not a production isolation boundary."""
 
     CACHE_ROOT = "/workspace/repo/.testforge-cache"
+    PROVIDER_NAME = "local-docker"
 
     def __init__(self) -> None:
         self.git_image = os.getenv("PREVIEW_GIT_IMAGE", "alpine/git:v2.47.2")
@@ -53,7 +57,10 @@ class LocalDockerSandboxProvider:
         except Exception as exc:
             raise SandboxExecutionError("SANDBOX_UNAVAILABLE", "Docker is unavailable to the preview worker.") from exc
 
-    def deploy(self, preview, environment, transition, log) -> SandboxResult:
+    def deploy(
+        self, preview, environment, transition, log,
+        repository_authorization: str | None = None,
+    ) -> SandboxResult:
         client = self._client()
         suffix = preview.id.replace("-", "")[:16]
         state = {
@@ -77,6 +84,9 @@ class LocalDockerSandboxProvider:
                 client, self.git_image,
                 ["clone", "--no-checkout", "--filter=blob:none", preview.repository_url, "/workspace/repo"],
                 volume, build_network.name, labels, log, working_dir="/workspace",
+                extra_environment=self._git_authorization_environment(
+                    preview.repository_url, repository_authorization
+                ),
             )
             self._run_step(
                 client, self.git_image,
@@ -179,6 +189,7 @@ class LocalDockerSandboxProvider:
     def _run_step(
         self, client, image, command, volume, network_name, labels, log,
         working_dir="/workspace/repo", user="root", drop_caps=True,
+        extra_environment: dict[str, str] | None = None,
     ) -> None:
         security = {
             "cap_drop": ["ALL"] if drop_caps else [],
@@ -192,6 +203,7 @@ class LocalDockerSandboxProvider:
             "XDG_CACHE_HOME": f"{self.CACHE_ROOT}/xdg",
             "COREPACK_HOME": f"{self.CACHE_ROOT}/corepack",
         }
+        cache_environment.update(extra_environment or {})
         container = client.containers.run(
             image, command, detach=True, working_dir=working_dir,
             volumes={volume.name: {"bind": "/workspace", "mode": "rw"}},
@@ -256,3 +268,28 @@ class LocalDockerSandboxProvider:
     @staticmethod
     def _nano_cpus(value: str) -> int:
         return int(value[:-1]) * 1_000_000 if value.endswith("m") else int(value) * 1_000_000_000
+
+    @staticmethod
+    def _git_authorization_environment(git_url: str, token: str | None) -> dict[str, str]:
+        if not token:
+            return {"GIT_TERMINAL_PROMPT": "0"}
+        parsed = urllib.parse.urlsplit(git_url)
+        username = {
+            "github.com": "x-access-token",
+            "www.github.com": "x-access-token",
+            "gitlab.com": "oauth2",
+            "bitbucket.org": "x-token-auth",
+        }.get((parsed.hostname or "").lower())
+        if not username:
+            raise SandboxExecutionError(
+                "REPOSITORY_AUTH_UNSUPPORTED",
+                "Authenticated preview cloning is not supported for this Git host.",
+            )
+        credentials = base64.b64encode(f"{username}:{token}".encode()).decode("ascii")
+        origin = f"{parsed.scheme}://{parsed.netloc}/"
+        return {
+            "GIT_TERMINAL_PROMPT": "0",
+            "GIT_CONFIG_COUNT": "1",
+            "GIT_CONFIG_KEY_0": f"http.{origin}.extraHeader",
+            "GIT_CONFIG_VALUE_0": f"Authorization: Basic {credentials}",
+        }

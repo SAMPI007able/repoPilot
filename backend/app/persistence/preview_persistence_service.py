@@ -49,7 +49,10 @@ class PreviewPersistenceService:
     def __init__(self, database: Database) -> None:
         self.database = database
 
-    def create(self, workspace_id: str, idempotency_key: str, environment_names: list[str]) -> tuple[PreviewEnvironment, bool]:
+    def create(
+        self, workspace_id: str, idempotency_key: str, environment_names: list[str],
+        provider: str = "local-docker",
+    ) -> tuple[PreviewEnvironment, bool]:
         now = datetime.now(timezone.utc)
         with self.database.session() as session:
             existing = session.scalar(
@@ -88,6 +91,7 @@ class PreviewPersistenceService:
                 environment_names=environment_names,
                 idempotency_key=idempotency_key,
                 log_storage_key=f"preview-logs/{preview_id}/console.log",
+                provider=provider,
                 expires_at=expires_at,
                 maximum_expires_at=maximum_expires_at,
                 created_at=now,
@@ -279,6 +283,11 @@ class PreviewPersistenceService:
             readyAt=self._aware(row.ready_at) if row.ready_at else None,
             stoppedAt=self._aware(row.stopped_at) if row.stopped_at else None,
             provider=row.provider,
+            developmentWarning=(
+                "This preview runs in an isolated Railway Sandbox and is temporary."
+                if row.provider == "railway-sandbox"
+                else "Trusted-development mode only. Docker alone is not an approved isolation boundary for hostile repositories."
+            ),
         )
 
     def _event_to_model(self, row: PreviewEventRow) -> PreviewEvent:

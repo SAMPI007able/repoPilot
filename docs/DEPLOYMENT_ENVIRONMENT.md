@@ -221,6 +221,13 @@ python -m app.scripts.check_environment --target backend
 The command prints missing variable names and configuration warnings, but never
 prints their values.
 
+## Production preview execution
+
+Do not set `PREVIEW_TRUSTED_LOCAL_EXECUTION=true` on Railway. Production
+previews use isolated Railway Sandboxes and a separate preview worker. Follow
+the complete topology, environment, and enablement checklist in
+`docs/realtime-preview/production-railway-sandboxes.md`.
+
 ## Auth0 alignment
 
 The following pairs must match exactly:

@@ -111,6 +111,7 @@ from app.services.runtime_manifest_service import (
     RuntimeManifestWorkspaceNotReadyError,
 )
 from app.services.preview_logs import PreviewLogService
+from app.services.sandbox_provider_factory import configured_preview_provider
 from app.services.preview_queue import PreviewQueueUnavailableError, RQPreviewJobQueue
 from app.services.preview_service import PreviewEnvironmentValidationError, PreviewService
 from app.config.rate_limit_settings import RateLimitSettings
@@ -302,6 +303,7 @@ preview_service = PreviewService(
     preview_persistence_service,
     RQPreviewJobQueue(),
     PreviewLogService(artifact_store),
+    configured_preview_provider(),
 )
 support_service = SupportService(
     SupportPersistenceService(database),
@@ -436,6 +438,17 @@ def _authorize_preview(preview_id: str, principal: Principal) -> None:
 
 
 def _require_feature(key: str) -> None:
+    if (
+        key == "preview"
+        and os.getenv("APP_ENV", "development").lower() == "production"
+        and os.getenv("PREVIEW_PRODUCTION_ENABLED", "false").lower() != "true"
+    ):
+        raise PreviewLabAPIError(
+            503,
+            "FEATURE_DISABLED",
+            "Production preview execution is not enabled in this environment.",
+            details={"feature": key},
+        )
     if not feature_flag_service.is_enabled(key):
         raise PreviewLabAPIError(
             503,
@@ -894,7 +907,16 @@ def create_preview(
     reservation_id = _preview_reservation_id(workspace_id, idempotency_key)
     rate_limit_guard.acquire(principal, "preview", reservation_id)
     try:
-        preview = preview_service.create(workspace_id, idempotency_key, payload)
+        workspace_summary = workspace_persistence_service.get_workspace_summary(
+            workspace_id, principal.user_id,
+        )
+        repository_authorization = (
+            _repository_clone_token(workspace_summary.repoUrl, principal)
+            if workspace_summary else None
+        )
+        preview = preview_service.create(
+            workspace_id, idempotency_key, payload, repository_authorization,
+        )
         try:
             rate_limit_service.replace_concurrency_slot(
                 principal.user_id, "preview", reservation_id, preview.id,

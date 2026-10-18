@@ -95,7 +95,7 @@ class FakePreviewService:
         self.user_id = user_id
         self.count = 0
 
-    def create(self, workspace_id, idempotency_key, payload):
+    def create(self, workspace_id, idempotency_key, payload, repository_authorization=None):
         del payload
         self.count += 1
         preview = preview_model(f"preview-{self.count}", workspace_id, PreviewStatus.QUEUED)

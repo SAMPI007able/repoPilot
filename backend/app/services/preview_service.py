@@ -23,17 +23,24 @@ class PreviewService:
         persistence: PreviewPersistenceService,
         queue: PreviewJobQueue,
         logs: PreviewLogService,
+        provider_name: str = "local-docker",
     ) -> None:
         self.persistence = persistence
         self.queue = queue
         self.logs = logs
+        self.provider_name = provider_name
 
-    def create(self, workspace_id: str, idempotency_key: str, payload: PreviewCreateRequest) -> PreviewEnvironment:
+    def create(
+        self, workspace_id: str, idempotency_key: str, payload: PreviewCreateRequest,
+        repository_authorization: str | None = None,
+    ) -> PreviewEnvironment:
         if not idempotency_key or len(idempotency_key) > 128:
             raise PreviewEnvironmentValidationError(["Idempotency-Key must contain 1 to 128 characters."])
 
         # Persist only names. Values live in the short-lived RQ payload and sandbox environment.
-        preview, created = self.persistence.create(workspace_id, idempotency_key, sorted(payload.environment))
+        preview, created = self.persistence.create(
+            workspace_id, idempotency_key, sorted(payload.environment), self.provider_name,
+        )
         if not created:
             return preview
         manifest_environment = preview.manifest.environment
@@ -55,7 +62,9 @@ class PreviewService:
             )
             raise PreviewEnvironmentValidationError(violations)
         try:
-            self.queue.enqueue_start(preview.id, payload.environment)
+            self.queue.enqueue_start(
+                preview.id, payload.environment, repository_authorization,
+            )
         except PreviewQueueUnavailableError:
             self.persistence.transition(
                 preview.id, PreviewStatus.FAILED, "Preview queue submission failed.",

@@ -77,6 +77,30 @@ class EnvironmentCheckTests(unittest.TestCase):
         self.assertFalse(any("OPENROUTER_API_KEY" in error for error in errors))
         self.assertFalse(any("QWEN_API_KEY" in error for error in errors))
 
+    def test_preview_worker_requires_a_separate_acknowledged_sandbox_environment(self):
+        environment = {
+            "APP_ENV": "production",
+            "DATABASE_URL": "postgresql://example",
+            "REDIS_URL": "rediss://example",
+            "ARTIFACT_STORE": "s3",
+            "ARTIFACT_S3_BUCKET": "bucket",
+            "ARTIFACT_S3_REGION": "us-east-1",
+            "PREVIEW_PROVIDER": "railway-sandbox",
+            "PREVIEW_TRUSTED_LOCAL_EXECUTION": "false",
+            "RAILWAY_API_TOKEN": "configured",
+            "RAILWAY_ENVIRONMENT_ID": "production-environment",
+            "RAILWAY_SANDBOX_ENVIRONMENT_ID": "sandbox-environment",
+            "PREVIEW_RAILWAY_ACKNOWLEDGE_DEDICATED_ENVIRONMENT": "true",
+        }
+        with patch.dict(os.environ, environment, clear=True):
+            errors, _ = validate("preview-worker")
+        self.assertEqual(errors, [])
+
+        environment["RAILWAY_SANDBOX_ENVIRONMENT_ID"] = "production-environment"
+        with patch.dict(os.environ, environment, clear=True):
+            errors, _ = validate("preview-worker")
+        self.assertTrue(any("must differ" in error for error in errors))
+
 
 if __name__ == "__main__":
     unittest.main()

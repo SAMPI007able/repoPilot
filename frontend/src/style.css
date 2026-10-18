@@ -2023,7 +2023,6 @@ button {
 .ask-panel__message--assistant .md-body {
   border: 1px solid rgba(58, 74, 114, 0.45);
   border-radius: 0.9rem;
-  background: rgba(10, 18, 31, 0.6);
   padding: 0.85rem 1rem;
 }
 

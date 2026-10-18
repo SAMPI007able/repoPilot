@@ -73,7 +73,7 @@ services:
       ARTIFACT_STORE: local
       ARTIFACT_LOCAL_ROOT: /app/workspace/artifacts
       RUNTIME_MANIFEST_AI_FALLBACK: "false"
-      PREVIEW_TRUSTED_LOCAL_EXECUTION: "true"
+      PREVIEW_TRUSTED_LOCAL_EXECUTION: "false"
       PREVIEW_PUBLIC_HOST: 127.0.0.1
       PREVIEW_HEALTH_HOST: host.docker.internal
       AUTH_MODE: oidc
@@ -106,7 +106,9 @@ services:
         required: false
       - path: ./.env
         required: true
-    environment: *backend-environment
+    environment:
+      <<: *backend-environment
+      PREVIEW_TRUSTED_LOCAL_EXECUTION: "true"
     user: root
     group_add:
       - "10001"

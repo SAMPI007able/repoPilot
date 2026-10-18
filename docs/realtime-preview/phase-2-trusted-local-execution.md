@@ -1,6 +1,6 @@
 # Phase 2: trusted local preview execution
 
-Phase 2 adds a real, temporary preview for trusted development repositories. It does not claim that ordinary Docker is a safe boundary for arbitrary hostile code. Production enablement remains gated on Phase 3's Kubernetes/gVisor controls.
+Phase 2 adds a real, temporary preview for trusted development repositories. It does not claim that ordinary Docker is a safe boundary for arbitrary hostile code. Production must use the Railway Sandbox provider documented in `production-railway-sandboxes.md`; the local Docker provider remains development-only.
 
 ## Runtime path
 

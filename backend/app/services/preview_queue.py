@@ -7,7 +7,10 @@ class PreviewQueueUnavailableError(RuntimeError):
 
 
 class PreviewJobQueue(Protocol):
-    def enqueue_start(self, preview_id: str, environment: dict[str, str]) -> None: ...
+    def enqueue_start(
+        self, preview_id: str, environment: dict[str, str],
+        repository_authorization: str | None = None,
+    ) -> None: ...
     def enqueue_stop(self, preview_id: str, expired: bool = False) -> None: ...
 
 
@@ -22,15 +25,22 @@ class RQPreviewJobQueue:
             from rq import Queue
             connection = Redis.from_url(self.redis_url, socket_connect_timeout=2, socket_timeout=2)
             connection.ping()
-            return Queue(self.queue_name, connection=connection, default_timeout="20m")
+            return Queue(
+                self.queue_name, connection=connection,
+                default_timeout=os.getenv("PREVIEW_JOB_TIMEOUT", "40m"),
+            )
         except Exception as exc:
             raise PreviewQueueUnavailableError("The preview worker queue is unavailable.") from exc
 
-    def enqueue_start(self, preview_id: str, environment: dict[str, str]) -> None:
+    def enqueue_start(
+        self, preview_id: str, environment: dict[str, str],
+        repository_authorization: str | None = None,
+    ) -> None:
         self._queue().enqueue(
             "app.workers.preview_tasks.start_preview",
             preview_id,
             environment,
+            repository_authorization,
             job_id=f"preview-start-{preview_id}",
             result_ttl=0,
             failure_ttl=0,
