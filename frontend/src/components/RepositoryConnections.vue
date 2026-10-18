@@ -27,6 +27,7 @@ import {
   listProviderRepositories,
 } from '../services/api'
 import type { ProviderConnection, ProviderRepository, SourceControlProvider } from '../types/api'
+import { useDialogStore } from '../stores/dialog'
 
 defineProps<{ busy: boolean }>()
 const emit = defineEmits<{
@@ -140,7 +141,13 @@ async function connect(provider: SourceControlProvider) {
 }
 
 async function disconnect(provider: SourceControlProvider) {
-  if (!window.confirm(`Disconnect ${provider}? Existing workspaces will remain available.`)) return
+  const confirmed = await useDialogStore().confirm({
+    title: `Disconnect ${provider}?`,
+    message: 'Existing workspaces will remain available, but you will not be able to import new repositories from this provider until you reconnect.',
+    confirmLabel: 'Disconnect',
+    tone: 'danger',
+  })
+  if (!confirmed) return
   pendingProvider.value = provider
   error.value = null
   try {

@@ -1,6 +1,7 @@
 import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
 import { captureTelemetry } from '../services/telemetry'
+import { useDialogStore } from './dialog'
 import {
   deletePersistedWorkspace,
   extractAPIError,
@@ -338,9 +339,13 @@ export const useWorkspaceStore = defineStore('workspace', () => {
       error.value = 'Wait for the workspace build to finish before removing it.'
       return
     }
-    if (!window.confirm(`Remove "${workspace.repoName}" from RepoPilot? This cannot be undone.`)) {
-      return
-    }
+    const confirmed = await useDialogStore().confirm({
+      title: 'Remove workspace?',
+      message: `"${workspace.repoName}" and its index, chat history, and previews will be removed from RepoPilot. This cannot be undone.`,
+      confirmLabel: 'Remove workspace',
+      tone: 'danger',
+    })
+    if (!confirmed) return
 
     error.value = null
     removedWorkspaceIds.add(id)
@@ -355,7 +360,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     } catch (caughtError) {
       removedWorkspaceIds.delete(id)
       error.value = extractMessage(caughtError, 'Failed to remove workspace.')
-      window.alert(error.value)
+      void useDialogStore().alert({ title: 'Could not remove workspace', message: error.value, tone: 'danger' })
     } finally {
       removingIds.value = removingIds.value.filter((workspaceId) => workspaceId !== id)
     }
@@ -381,7 +386,12 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     if (!workspace || reindexingIds.value.includes(id)) return null
     const selectedBranch = branch || workspace.indexedBranch || undefined
     const branchDescription = selectedBranch ? ` from branch “${selectedBranch}”` : ''
-    if (!window.confirm(`Re-index ${workspace.repoName}${branchDescription}?`)) return null
+    const confirmed = await useDialogStore().confirm({
+      title: 'Re-index repository?',
+      message: `RepoPilot will pull the latest code for ${workspace.repoName}${branchDescription} and rebuild its index. AI tools stay unavailable until the build finishes.`,
+      confirmLabel: 'Re-index',
+    })
+    if (!confirmed) return null
 
     error.value = null
     reindexingIds.value = [...reindexingIds.value, id]
@@ -416,7 +426,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     } catch (caughtError) {
       error.value = extractMessage(caughtError, 'Failed to re-index workspace.')
       patchWorkspace(id, { status: 'ready', indexedBranch: previousBranch })
-      window.alert(error.value)
+      void useDialogStore().alert({ title: 'Re-index failed', message: error.value, tone: 'danger' })
       return null
     } finally {
       reindexingIds.value = reindexingIds.value.filter((workspaceId) => workspaceId !== id)

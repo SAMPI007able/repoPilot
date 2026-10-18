@@ -242,7 +242,7 @@ watch(html, () => {
 
 /* Light-theme overrides */
 :root[data-theme='light'] .md-body :deep(.md-inline-code) {
-  background: rgba(79, 70, 229, 0.08);
+  /* background: rgba(79, 70, 229, 0.08); */
   color: var(--brand-300);
   border-color: rgba(79, 70, 229, 0.2);
 }

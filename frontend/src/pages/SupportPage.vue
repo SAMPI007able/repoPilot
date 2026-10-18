@@ -1,9 +1,11 @@
 <script setup lang="ts">
 import { computed, defineAsyncComponent, onMounted, ref } from 'vue'
-import { ArrowLeft, ChevronDown, LifeBuoy, RefreshCw, Send, ShieldCheck } from '@lucide/vue'
+import { ArrowLeft, ChevronDown, LifeBuoy, Mail, RefreshCw, Send, ShieldCheck } from '@lucide/vue'
 import { useAuthStore } from '../stores/auth'
 import { createSupportTicket, extractAPIError, listMySupportTickets } from '../services/api'
-import { supportCategoryLabels, supportCategoryOptions, supportStatusLabels } from '../support/labels'
+import {
+  supportCategoryLabels, supportCategoryOptions, supportEmail, supportMailto, supportStatusLabels,
+} from '../support/labels'
 import type { SupportCategory, SupportTicket } from '../types/api'
 
 const auth = useAuthStore()
@@ -84,9 +86,14 @@ onMounted(loadTickets)
         <h1>Support</h1>
         <p>Tell us what went wrong or what you need. Our team will follow up by email.</p>
       </div>
-      <RouterLink v-if="isAdmin" class="btn btn-ghost" to="/admin#support">
-        <ShieldCheck :size="16" /> Manage all tickets
-      </RouterLink>
+      <div class="support-header-actions">
+        <a class="btn btn-ghost" :href="supportMailto" :title="supportEmail">
+          <Mail :size="16" /> Email us
+        </a>
+        <RouterLink v-if="isAdmin" class="btn btn-ghost" to="/admin#support">
+          <ShieldCheck :size="16" /> Manage all tickets
+        </RouterLink>
+      </div>
     </header>
 
     <div class="support-layout">

@@ -1,5 +1,8 @@
 import type { SupportCategory, SupportTicketStatus } from '../types/api'
 
+export const supportEmail = 'repopilotapp@gmail.com'
+export const supportMailto = `mailto:${supportEmail}?subject=${encodeURIComponent('RepoPilot support')}`
+
 export const supportCategoryOptions: { value: SupportCategory; label: string }[] = [
   { value: 'CHAT_WITH_CODEBASE', label: 'Chat with Codebase' },
   { value: 'TEST_GENERATION', label: 'Test Generation' },

@@ -1,4 +1,4 @@
-import { createRouter, createWebHistory } from 'vue-router'
+import { createRouter, createWebHistory, START_LOCATION } from 'vue-router'
 const Home = () => import('../pages/Home.vue')
 const SignIn = () => import('../pages/SignIn.vue')
 const AuthCallback = () => import('../pages/AuthCallback.vue')
@@ -28,8 +28,10 @@ const router = createRouter({
       redirect: '/',
     },
   ],
-  scrollBehavior(to, _from, savedPosition) {
-    if (savedPosition) return savedPosition
+  scrollBehavior(to, from, savedPosition) {
+    // On a fresh load or reload, history.state still holds the last scroll position; always start
+    // at the top instead. Saved positions are only restored for back/forward navigation.
+    if (savedPosition && from !== START_LOCATION) return savedPosition
     if (to.hash) return { el: to.hash, top: 16, behavior: 'smooth' }
     return { top: 0 }
   },
