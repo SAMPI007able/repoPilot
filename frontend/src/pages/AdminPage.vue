@@ -116,7 +116,7 @@ watch(isAdmin, (allowed) => { if (allowed && !dashboard.value) void loadAll() })
 <template>
   <main class="admin-shell">
     <header class="admin-header">
-      <div><RouterLink class="admin-back" to="/"><ArrowLeft :size="16" /> Back to TestForge</RouterLink><h1>Admin control plane</h1><p>Users, live infrastructure, usage, and emergency controls.</p></div>
+      <div><RouterLink class="admin-back" to="/"><ArrowLeft :size="16" /> Back to RepoPilot</RouterLink><h1>Admin control plane</h1><p>Users, live infrastructure, usage, and emergency controls.</p></div>
       <button class="btn btn-ghost" :disabled="loading" @click="loadAll"><RefreshCw :size="16" :class="{ spin: loading }" /> Refresh</button>
     </header>
 

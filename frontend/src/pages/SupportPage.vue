@@ -82,7 +82,7 @@ onMounted(loadTickets)
   <main class="admin-shell support-shell">
     <header class="admin-header">
       <div>
-        <RouterLink class="admin-back" to="/"><ArrowLeft :size="16" /> Back to TestForge</RouterLink>
+        <RouterLink class="admin-back" to="/"><ArrowLeft :size="16" /> Back to RepoPilot</RouterLink>
         <h1>Support</h1>
         <p>Tell us what went wrong or what you need. Our team will follow up by email.</p>
       </div>
